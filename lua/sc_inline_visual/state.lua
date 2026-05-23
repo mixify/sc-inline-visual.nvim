@@ -4,7 +4,7 @@ local M = {}
 
 local targets = {} -- target_name -> state table
 local aliases = {} -- ndef_name -> original target_name (e.g. "scvis_block3" -> "block3")
-local HISTORY_LEN = 16
+local HISTORY_LEN = 24
 local EVENT_HISTORY_LEN = 20
 local EVENT_TTL = 3.0 -- seconds
 local ACTIVE_TTL = 0.5 -- seconds without data before decay starts
@@ -21,10 +21,9 @@ local function new_state(block)
     start_line = block.start_line,
     end_line = block.end_line,
     amp_history = {},
+    centroid_history = {},
     amp = 0,
     centroid = 0,
-    spectrum = {},   -- 8 FFT bin magnitudes
-    waveform = {},   -- ~16 audio samples
     params = {},
     events = {},
     last_update = 0,
@@ -114,9 +113,10 @@ local function apply_update(s, msg_type, ...)
     s.centroid = centroid or 0
     local h = s.amp_history
     h[#h + 1] = s.amp
-    if #h > HISTORY_LEN then
-      table.remove(h, 1)
-    end
+    if #h > HISTORY_LEN then table.remove(h, 1) end
+    local ch = s.centroid_history
+    ch[#ch + 1] = s.centroid
+    if #ch > HISTORY_LEN then table.remove(ch, 1) end
   elseif msg_type == "event" then
     local name, amp = ...
     local events = s.events
@@ -124,12 +124,6 @@ local function apply_update(s, msg_type, ...)
     if #events > EVENT_HISTORY_LEN then
       table.remove(events, 1)
     end
-  elseif msg_type == "spectrum" then
-    local bins = ...
-    if bins then s.spectrum = bins end
-  elseif msg_type == "waveform" then
-    local samples = ...
-    if samples then s.waveform = samples end
   elseif msg_type == "param" then
     local name, value = ...
     if name then

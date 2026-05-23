@@ -13,8 +13,6 @@ local function ensure_hl()
   vim.api.nvim_set_hl(0, "SCInlineVisualBright", { fg = "#aaddff", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualDim", { fg = "#555555", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualEvent", { fg = "#ffaa55", default = true })
-  vim.api.nvim_set_hl(0, "SCInlineVisualSpectrum", { fg = "#77ddaa", default = true })
-  vim.api.nvim_set_hl(0, "SCInlineVisualWave", { fg = "#aa88ff", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualCentroid", { fg = "#ddaa77", default = true })
 end
 
@@ -56,22 +54,18 @@ function M.render(bufnr, all_states)
     -- Header: target name
     vis_lines[#vis_lines + 1] = { text = "╶ " .. display_name, hl = "SCInlineVisualBright" }
 
-    -- Amplitude: meter + sparkline history
+    -- Amplitude: meter + sparkline
     vis_lines[#vis_lines + 1] = { text = "  " .. widgets.meter("amp", s.amp, 1.0) .. " " .. widgets.sparkline("", s.amp_history), hl = HL_GROUP }
 
-    -- Spectrum
-    if #s.spectrum > 0 then
-      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.spectrum(s.spectrum), hl = "SCInlineVisualSpectrum" }
-    end
+    -- Spectrum (derived from centroid + amp)
+    vis_lines[#vis_lines + 1] = { text = "  " .. widgets.spectrum(s.centroid, s.amp), hl = "SCInlineVisualCentroid" }
 
-    -- Waveform
-    if #s.waveform > 0 then
-      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.waveform(s.waveform), hl = "SCInlineVisualWave" }
-    end
+    -- Waveform (derived from amp history)
+    vis_lines[#vis_lines + 1] = { text = "  " .. widgets.waveform(s.amp_history), hl = "SCInlineVisualDim" }
 
-    -- Spectral centroid
+    -- Spectral centroid history
     if s.centroid > 0 then
-      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.centroid(s.centroid), hl = "SCInlineVisualCentroid" }
+      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.centroid(s.centroid, s.centroid_history), hl = "SCInlineVisualCentroid" }
     end
 
     -- Parameters
