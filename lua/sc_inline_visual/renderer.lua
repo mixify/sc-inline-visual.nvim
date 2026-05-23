@@ -6,23 +6,23 @@ local widgets = require("sc_inline_visual.widgets")
 local M = {}
 
 local ns_id = nil
-local buf_lines_cache = nil
-local buf_lines_tick = -1
+local buf_cache = {} -- bufnr -> { lines, tick }
 
 local function ensure_hl()
   vim.api.nvim_set_hl(0, "SCInlineVisual", { fg = "#888888", default = true })
-  vim.api.nvim_set_hl(0, "SCInlineVisualBright", { fg = "#aaddff", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualDim", { fg = "#555555", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualEvent", { fg = "#ffaa55", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualCentroid", { fg = "#ddaa77", default = true })
-  vim.api.nvim_set_hl(0, "SCInlineVisualWave", { fg = "#aa88ff", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualHeader", { fg = "#aaddff", bold = true, default = true })
+  -- Amp color gradient: green (quiet) → yellow (moderate) → red (loud)
+  vim.api.nvim_set_hl(0, "SCInlineVisualAmpLow", { fg = "#55cc77", default = true })
+  vim.api.nvim_set_hl(0, "SCInlineVisualAmpMid", { fg = "#cccc55", default = true })
+  vim.api.nvim_set_hl(0, "SCInlineVisualAmpHigh", { fg = "#cc5555", default = true })
+  vim.api.nvim_set_hl(0, "SCInlineVisualAmpHot", { fg = "#ff3333", bold = true, default = true })
 end
 
 function M.init(bufnr)
   ns_id = vim.api.nvim_create_namespace("sc_inline_visual")
-  buf_lines_cache = nil
-  buf_lines_tick = -1
   ensure_hl()
 end
 
@@ -30,17 +30,19 @@ function M.clear(bufnr)
   if ns_id and bufnr and vim.api.nvim_buf_is_valid(bufnr) then
     vim.api.nvim_buf_clear_namespace(bufnr, ns_id, 0, -1)
   end
-  buf_lines_cache = nil
-  buf_lines_tick = -1
+  buf_cache[bufnr] = nil
 end
 
 local function get_buf_lines(bufnr)
   local tick = vim.api.nvim_buf_get_changedtick(bufnr)
-  if tick ~= buf_lines_tick then
-    buf_lines_cache = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    buf_lines_tick = tick
+  local cached = buf_cache[bufnr]
+  if not cached or cached.tick ~= tick then
+    buf_cache[bufnr] = {
+      lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+      tick = tick,
+    }
   end
-  return buf_lines_cache
+  return buf_cache[bufnr].lines
 end
 
 local function block_max_width(lines, start_line, end_line)

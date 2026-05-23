@@ -6,13 +6,9 @@ local M = {}
 local BLOCK_CHARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 
 -- Braille: 2x4 dot matrix per character (U+2800..U+28FF)
--- Left column dots (bottom to top): 7, 3, 2, 1
--- Right column dots (bottom to top): 8, 6, 5, 4
 local LEFT_DOTS  = { 0x40, 0x04, 0x02, 0x01 }
 local RIGHT_DOTS = { 0x80, 0x20, 0x10, 0x08 }
 
---- Pack two values (0..1) into one braille character.
---- Left column = v1 (4 levels), Right column = v2 (4 levels).
 local function braille_pair(v1, v2)
   local l = math.floor(math.max(0, math.min(1, v1)) * 4 + 0.5)
   local r = math.floor(math.max(0, math.min(1, v2)) * 4 + 0.5)
@@ -22,67 +18,105 @@ local function braille_pair(v1, v2)
   return vim.fn.nr2char(code)
 end
 
---- Single-column braille sparkline (one value per dot column).
-local function braille_sparkline(values, width)
-  width = width or 12
-  local chars = {}
+--- Pick highlight group based on amplitude level.
+local function amp_hl(v)
+  if v >= 0.8 then return "SCInlineVisualAmpHot"
+  elseif v >= 0.5 then return "SCInlineVisualAmpHigh"
+  elseif v >= 0.2 then return "SCInlineVisualAmpMid"
+  else return "SCInlineVisualAmpLow"
+  end
+end
+
+--- Braille sparkline with per-character color gradient.
+--- Returns multiple segments, each colored by amplitude level.
+local function braille_sparkline_colored(values, width)
+  width = width or 14
   local n = #values
-  -- Pack pairs of consecutive values
   local start = math.max(1, n - (width * 2) + 1)
   local vals = {}
   for i = start, n do vals[#vals + 1] = values[i] end
-  -- Pad to even count
   while #vals < width * 2 do table.insert(vals, 1, 0) end
 
+  -- Group consecutive pairs by color
+  local segments = {}
+  local cur_hl = nil
+  local cur_chars = {}
   for i = 1, #vals - 1, 2 do
-    chars[#chars + 1] = braille_pair(vals[i], vals[i + 1])
+    local v1, v2 = vals[i], vals[i + 1]
+    local peak = math.max(v1, v2)
+    local hl = amp_hl(peak)
+    if hl ~= cur_hl then
+      if cur_hl and #cur_chars > 0 then
+        segments[#segments + 1] = { table.concat(cur_chars), cur_hl }
+      end
+      cur_hl = hl
+      cur_chars = {}
+    end
+    cur_chars[#cur_chars + 1] = braille_pair(v1, v2)
   end
-  return table.concat(chars)
+  if cur_hl and #cur_chars > 0 then
+    segments[#segments + 1] = { table.concat(cur_chars), cur_hl }
+  end
+
+  if #segments == 0 then
+    segments[1] = { string.rep(vim.fn.nr2char(0x2800), width), "SCInlineVisualDim" }
+  end
+
+  return segments
 end
 
---- Dual braille sparkline: overlay two histories in one line.
---- Left dots = history1 (e.g. amplitude), Right dots = history2 (e.g. centroid normalized).
-local function braille_dual(hist1, hist2, width)
-  width = width or 12
-  local chars = {}
-
-  -- Normalize hist2 (centroid) to 0..1 via log scale
+--- Frequency position bar with smoothed centroid + spectral spread.
+--- Uses centroid_history to compute a smoothed position and spread width.
+local function freq_bar(centroid, centroid_history, width)
+  width = width or 14
   local MIN_F, MAX_F = 50, 10000
   local log_range = math.log(MAX_F / MIN_F)
-  local function norm_freq(f)
+
+  local function freq_to_pos(f)
     if f <= MIN_F then return 0 end
     return math.max(0, math.min(1, math.log(f / MIN_F) / log_range))
   end
 
-  -- Take last `width` values from each
-  local n1, n2 = #hist1, #hist2
-  for i = 1, width do
-    local idx1 = n1 - width + i
-    local idx2 = n2 - width + i
-    local v1 = (idx1 >= 1) and (hist1[idx1] or 0) or 0
-    local v2 = (idx2 >= 1) and norm_freq(hist2[idx2] or 0) or 0
-    chars[#chars + 1] = braille_pair(v1, v2)
+  -- Smooth centroid: average of recent history
+  local smooth_centroid = centroid
+  if centroid_history and #centroid_history >= 4 then
+    local sum = 0
+    local count = math.min(8, #centroid_history)
+    for i = #centroid_history - count + 1, #centroid_history do
+      sum = sum + (centroid_history[i] or 0)
+    end
+    smooth_centroid = sum / count
   end
-  return table.concat(chars)
-end
 
---- Frequency position bar: shows WHERE the sound is on a lo-hi scale.
---- e.g. "lo░░░▓▓░░hi"
-local function freq_position(centroid, width)
-  width = width or 10
-  local MIN_F, MAX_F = 50, 10000
+  -- Compute spread from history variance
+  local spread = 1 -- default narrow
+  if centroid_history and #centroid_history >= 4 then
+    local count = math.min(12, #centroid_history)
+    local positions = {}
+    for i = #centroid_history - count + 1, #centroid_history do
+      positions[#positions + 1] = freq_to_pos(centroid_history[i] or 0)
+    end
+    local min_p, max_p = 1, 0
+    for _, p in ipairs(positions) do
+      if p < min_p then min_p = p end
+      if p > max_p then max_p = p end
+    end
+    spread = math.max(1, math.floor((max_p - min_p) * width + 0.5))
+  end
+
+  local center = freq_to_pos(smooth_centroid)
+  local center_slot = math.floor(center * (width - 1)) + 1
 
   local slots = {}
   for i = 1, width do slots[i] = "░" end
 
-  if centroid > MIN_F then
-    local ratio = math.log(centroid / MIN_F) / math.log(MAX_F / MIN_F)
-    ratio = math.max(0, math.min(1, ratio))
-    local pos = math.floor(ratio * (width - 1)) + 1
-    -- Fill 2 chars wide for visibility
-    slots[pos] = "▓"
-    if pos > 1 then slots[pos - 1] = "▒" end
-    if pos < width then slots[pos + 1] = "▒" end
+  -- Draw spread region + bright center
+  local half = math.floor(spread / 2)
+  for i = math.max(1, center_slot - half), math.min(width, center_slot + half) do
+    slots[i] = "▒"
+  end
+  if center_slot >= 1 and center_slot <= width then
+    slots[center_slot] = "▓"
   end
 
   return table.concat(slots)
@@ -98,12 +132,7 @@ local function fmt_freq(value)
   return "—"
 end
 
---- Main visualization: 4-line display per block.
---- Line 1: target name
---- Line 2: amp — braille sparkline + value
---- Line 3: freq — position bar on lo-hi scale + value
---- Line 4: wave — actual waveform shape as braille
---- Returns list of segment rows.
+--- Main visualization: 3-line display per block.
 function M.block_vis(state)
   local display_name = state.target:gsub("^scvis_", "")
 
@@ -113,16 +142,16 @@ function M.block_vis(state)
     { display_name, "SCInlineVisualHeader" },
   }
 
-  -- Line 2: amp sparkline + value
-  local amp_braille = braille_sparkline(state.amp_history, 14)
-  local line2 = {
-    { "amp  ", "SCInlineVisualDim" },
-    { amp_braille, "SCInlineVisualBright" },
-    { "  " .. string.format("%.2f", state.amp), "SCInlineVisual" },
-  }
+  -- Line 2: amp — colored braille sparkline + value
+  local amp_segs = braille_sparkline_colored(state.amp_history, 14)
+  local line2 = { { "amp  ", "SCInlineVisualDim" } }
+  for _, seg in ipairs(amp_segs) do
+    line2[#line2 + 1] = seg
+  end
+  line2[#line2 + 1] = { "  " .. string.format("%.2f", state.amp), amp_hl(state.amp) }
 
-  -- Line 3: freq position bar
-  local fbar = freq_position(state.centroid, 14)
+  -- Line 3: freq — smoothed position bar with spread
+  local fbar = freq_bar(state.centroid, state.centroid_history, 14)
   local line3 = {
     { "freq ", "SCInlineVisualDim" },
     { fbar, "SCInlineVisualCentroid" },
@@ -158,7 +187,7 @@ function M.param_bar(label, value)
 
   return {
     { string.format("%-5s", label:sub(1, 4)), "SCInlineVisualDim" },
-    { string.rep("█", filled), "SCInlineVisualBright" },
+    { string.rep("█", filled), "SCInlineVisualAmpMid" },
     { string.rep("░", empty), "SCInlineVisualDim" },
     { " " .. val_str, "SCInlineVisual" },
   }

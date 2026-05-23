@@ -7,9 +7,7 @@ local M = {}
 
 local running = false
 local timer = nil
-local bufnr = nil
-local eval_hook_id = nil
-local rescan_autocmd_id = nil
+local tracked_bufs = {} -- bufnr -> { rescan_autocmd_id }
 local on_send_replaced = false
 
 -- Locate the SC helper files relative to this plugin
@@ -45,14 +43,10 @@ function M.start()
     return
   end
 
-  bufnr = vim.api.nvim_get_current_buf()
-  local blocks = parser.scan(bufnr)
-  if #blocks == 0 then
-    vim.notify("SCInlineVisual: no blocks found", vim.log.levels.WARN)
-    return
-  end
+  -- Scan current buffer and add it
+  local bufnr = vim.api.nvim_get_current_buf()
+  M._add_buffer(bufnr)
 
-  state.init(blocks)
   renderer.init(bufnr)
 
   -- Listen for OSC
@@ -61,77 +55,93 @@ function M.start()
     state.update(msg_type, target, ...)
   end)
 
-  -- Send monitor synth to sclang — sent as individual statements
+  -- Send monitor synth to sclang
   M._install_monitor()
 
   -- Replace scnvim's on_send to wrap anonymous blocks in Ndef
-  local ok_editor, editor = pcall(require, "scnvim.editor")
-  if ok_editor and editor.on_send and editor.on_send.replace then
-    local ok_sclang, sclang = pcall(require, "scnvim.sclang")
-    if ok_sclang then
-      editor.on_send:replace(function(lines, callback)
-        if callback then
-          lines = callback(lines)
-        end
-
-        local code = table.concat(lines, "\n")
-
-        -- Find which block the cursor is in
-        local cursor = vim.api.nvim_win_get_cursor(0)
-        local line = cursor[1] - 1
-        local target, kind = state.activate_by_line(line)
-
-        -- Wrap anonymous blocks in Ndef for per-block monitoring
-        local ndef_name = nil
-        if target and kind == "anonymous" then
-          local wrapped, name = M._wrap_in_ndef(code, target)
-          if wrapped ~= code then
-            code = wrapped
-            ndef_name = name
-            -- Register alias so SC data for "scvis_block3" routes to "block3"
-            state.set_alias(ndef_name, target)
+  if not on_send_replaced then
+    local ok_editor, editor = pcall(require, "scnvim.editor")
+    if ok_editor and editor.on_send and editor.on_send.replace then
+      local ok_sclang, sclang = pcall(require, "scnvim.sclang")
+      if ok_sclang then
+        editor.on_send:replace(function(lines, callback)
+          if callback then
+            lines = callback(lines)
           end
-        end
 
-        sclang.send(code)
+          local code = table.concat(lines, "\n")
+          local cur_buf = vim.api.nvim_get_current_buf()
 
-        -- Set up per-ndef monitoring after a delay
-        local track_name = ndef_name or (kind == "ndef" and target) or nil
-        if track_name then
-          vim.defer_fn(function()
-            send_to_sclang(string.format('~scvisTrackNdef.value("%s")', track_name))
-          end, 500)
-        end
-      end)
-      on_send_replaced = true
+          -- Auto-add new .scd buffers
+          if not tracked_bufs[cur_buf] then
+            M._add_buffer(cur_buf)
+          end
+
+          -- Find which block the cursor is in
+          local cursor = vim.api.nvim_win_get_cursor(0)
+          local line = cursor[1] - 1
+          local target, kind = state.activate_by_line(line)
+
+          -- Wrap anonymous blocks in Ndef for per-block monitoring
+          local ndef_name = nil
+          if target and kind == "anonymous" then
+            local wrapped, name = M._wrap_in_ndef(code, target)
+            if wrapped ~= code then
+              code = wrapped
+              ndef_name = name
+              state.set_alias(ndef_name, target)
+            end
+          end
+
+          sclang.send(code)
+
+          local track_name = ndef_name or (kind == "ndef" and target) or nil
+          if track_name then
+            vim.defer_fn(function()
+              send_to_sclang(string.format('~scvisTrackNdef.value("%s")', track_name))
+            end, 500)
+          end
+        end)
+        on_send_replaced = true
+      end
     end
   end
 
-  -- Auto-rescan when buffer text changes
-  rescan_autocmd_id = vim.api.nvim_create_autocmd("TextChanged", {
+  -- Render loop at ~30 FPS (33ms) — renders all tracked buffers
+  timer = vim.uv.new_timer()
+  timer:start(0, 33, vim.schedule_wrap(function()
+    local all = state.get_all()
+    for buf, _ in pairs(tracked_bufs) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        renderer.render(buf, all)
+      else
+        tracked_bufs[buf] = nil
+      end
+    end
+  end))
+
+  running = true
+  vim.notify("SCInlineVisual: started", vim.log.levels.INFO)
+end
+
+--- Add a buffer for tracking. Scans for blocks and sets up auto-rescan.
+function M._add_buffer(bufnr)
+  if tracked_bufs[bufnr] then return end
+
+  local blocks = parser.scan(bufnr)
+  state.init(blocks) -- merges with existing state
+
+  local autocmd_id = vim.api.nvim_create_autocmd("TextChanged", {
     buffer = bufnr,
     callback = function()
       if running then
-        local blocks = parser.scan(bufnr)
-        state.init(blocks)
+        local b = parser.scan(bufnr)
+        state.init(b)
       end
     end,
   })
 
-  -- Render loop at ~30 FPS (33ms)
-  timer = vim.uv.new_timer()
-  timer:start(0, 33, vim.schedule_wrap(function()
-    if not vim.api.nvim_buf_is_valid(bufnr) then
-      M.stop()
-      return
-    end
-    renderer.render(bufnr, state.get_all())
-  end))
-
-  running = true
-  local names = {}
-  for _, b in ipairs(blocks) do names[#names + 1] = b.target end
-  vim.notify("SCInlineVisual: started (" .. #blocks .. " blocks)", vim.log.levels.INFO)
+  tracked_bufs[bufnr] = { autocmd_id = autocmd_id }
 end
 
 function M.stop()
@@ -143,11 +153,14 @@ function M.stop()
     timer = nil
   end
 
-  -- Remove autocmd
-  if rescan_autocmd_id then
-    vim.api.nvim_del_autocmd(rescan_autocmd_id)
-    rescan_autocmd_id = nil
+  -- Remove autocmds and clear extmarks for all tracked buffers
+  for buf, info in pairs(tracked_bufs) do
+    if info.autocmd_id then
+      pcall(vim.api.nvim_del_autocmd, info.autocmd_id)
+    end
+    renderer.clear(buf)
   end
+  tracked_bufs = {}
 
   -- Restore scnvim's original on_send
   if on_send_replaced then
@@ -159,7 +172,6 @@ function M.stop()
   end
 
   osc.stop()
-  renderer.clear(bufnr)
   state.reset()
   M._remove_monitor()
 
