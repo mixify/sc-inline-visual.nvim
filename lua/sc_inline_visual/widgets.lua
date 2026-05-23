@@ -18,23 +18,26 @@ local DEFAULT_EVENT_GLYPH = "●"
 --- Sparkline: target name + amplitude history as block characters.
 --- e.g. "bass ▄▆██▇▃▁"
 function M.sparkline(name, history)
+  local WIDTH = 12
   if #history == 0 then
-    return name .. " " .. string.rep("▁", 8)
+    local prefix = name ~= "" and (name .. " ") or ""
+    return prefix .. string.rep("▁", WIDTH)
   end
 
   local chars = {}
-  local start = math.max(1, #history - 7)
+  local start = math.max(1, #history - (WIDTH - 1))
   for i = start, #history do
     local v = math.max(0, math.min(1, history[i]))
     local idx = math.floor(v * 7) + 1
     chars[#chars + 1] = BLOCK_CHARS[idx]
   end
 
-  while #chars < 8 do
+  while #chars < WIDTH do
     table.insert(chars, 1, "▁")
   end
 
-  return string.format("%-5s", name) .. table.concat(chars)
+  local prefix = name ~= "" and (name .. " ") or ""
+  return prefix .. table.concat(chars)
 end
 
 --- Meter: label + filled/empty bar + numeric value.
@@ -80,53 +83,46 @@ function M.centroid(value)
   return "freq " .. table.concat(slots) .. "  " .. val_str
 end
 
---- Spectrum: show 8 FFT bin magnitudes as vertical bars.
---- e.g. "spec █▇▅▃▂▁▁▁"
+--- Spectrum: show FFT band magnitudes as vertical bars with frequency labels.
+--- e.g. "spec ▁▃▇█▅▂ lo      hi"
 function M.spectrum(bins)
+  local N = 6
   if not bins or #bins == 0 then
-    return "spec " .. string.rep("▁", 8)
+    return "spec " .. string.rep("▁", N) .. " lo    hi"
   end
 
-  -- Normalize bins to 0..1 range
+  -- Normalize bins relative to max
   local max_val = 0
   for _, v in ipairs(bins) do
     if v > max_val then max_val = v end
   end
 
   local chars = {}
-  for i = 1, math.min(8, #bins) do
+  for i = 1, math.min(N, #bins) do
     local v = (max_val > 0) and (bins[i] / max_val) or 0
     v = math.max(0, math.min(1, v))
     local idx = math.floor(v * 7) + 1
     chars[#chars + 1] = BLOCK_CHARS[idx]
   end
 
-  -- Pad to 8
-  while #chars < 8 do
+  while #chars < N do
     chars[#chars + 1] = "▁"
   end
 
-  return "spec " .. table.concat(chars)
+  return "spec " .. table.concat(chars) .. " lo    hi"
 end
 
 --- Waveform: show audio samples as a mini oscilloscope.
---- Uses upper/lower block characters to represent bipolar signal (-1..+1).
---- e.g. "wave ▁▃▅▇█▇▅▃▁▃▅▇█▇▅▃"
+--- Uses block characters to represent bipolar signal (-1..+1).
+--- e.g. "wave ▁▃▅▇█▇▅▃"
 function M.waveform(samples)
-  local WIDTH = 16
-
   if not samples or #samples == 0 then
-    return "wave " .. string.rep("─", WIDTH)
+    return "wave " .. string.rep("─", 8)
   end
 
-  -- Map bipolar -1..+1 to block chars
-  -- ▁ = bottom (-1), █ = top (+1), middle ~= ▄
   local chars = {}
-  local step = math.max(1, math.floor(#samples / WIDTH))
-  for i = 1, WIDTH do
-    local idx = math.min(#samples, (i - 1) * step + 1)
-    local v = samples[idx] or 0
-    -- Map -1..+1 to 0..1
+  for i = 1, math.min(8, #samples) do
+    local v = samples[i] or 0
     local normalized = (v + 1) * 0.5
     normalized = math.max(0, math.min(1, normalized))
     local char_idx = math.floor(normalized * 7) + 1

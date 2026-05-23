@@ -49,63 +49,44 @@ function M.render(bufnr, all_states)
   for _, s in pairs(all_states) do
     if not s.active then goto continue end
     -- Build the widget lines for this target
+    -- Each widget: label line, then data line
     local vis_lines = {}
+    local display_name = s.target:gsub("^scvis_", "")
 
-    -- Line 0 (marker line): sparkline with target name
-    vis_lines[1] = {
-      text = widgets.sparkline(s.target, s.amp_history),
-      hl = "SCInlineVisualBright",
-    }
+    -- Header: target name
+    vis_lines[#vis_lines + 1] = { text = "╶ " .. display_name, hl = "SCInlineVisualBright" }
 
-    -- Line 1: amplitude meter
-    vis_lines[2] = {
-      text = widgets.meter("amp", s.amp, 1.0),
-      hl = HL_GROUP,
-    }
-
-    -- Spectral centroid
-    if s.centroid > 0 then
-      vis_lines[#vis_lines + 1] = {
-        text = widgets.centroid(s.centroid),
-        hl = "SCInlineVisualCentroid",
-      }
-    end
+    -- Amplitude: meter + sparkline history
+    vis_lines[#vis_lines + 1] = { text = "  " .. widgets.meter("amp", s.amp, 1.0) .. " " .. widgets.sparkline("", s.amp_history), hl = HL_GROUP }
 
     -- Spectrum
     if #s.spectrum > 0 then
-      vis_lines[#vis_lines + 1] = {
-        text = widgets.spectrum(s.spectrum),
-        hl = "SCInlineVisualSpectrum",
-      }
+      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.spectrum(s.spectrum), hl = "SCInlineVisualSpectrum" }
     end
 
     -- Waveform
     if #s.waveform > 0 then
-      vis_lines[#vis_lines + 1] = {
-        text = widgets.waveform(s.waveform),
-        hl = "SCInlineVisualWave",
-      }
+      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.waveform(s.waveform), hl = "SCInlineVisualWave" }
     end
 
-    -- Parameter lines
+    -- Spectral centroid
+    if s.centroid > 0 then
+      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.centroid(s.centroid), hl = "SCInlineVisualCentroid" }
+    end
+
+    -- Parameters
     local param_names = {}
     for name, _ in pairs(s.params) do
       param_names[#param_names + 1] = name
     end
     table.sort(param_names)
     for _, name in ipairs(param_names) do
-      vis_lines[#vis_lines + 1] = {
-        text = widgets.param_bar(name, s.params[name]),
-        hl = HL_GROUP,
-      }
+      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.param_bar(name, s.params[name]), hl = HL_GROUP }
     end
 
-    -- Event timeline
+    -- Events
     if #s.events > 0 then
-      vis_lines[#vis_lines + 1] = {
-        text = widgets.event_timeline(s.events),
-        hl = "SCInlineVisualEvent",
-      }
+      vis_lines[#vis_lines + 1] = { text = "  " .. widgets.event_timeline(s.events), hl = "SCInlineVisualEvent" }
     end
 
     -- Place virtual text on buffer lines
