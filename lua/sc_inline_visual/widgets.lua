@@ -129,35 +129,39 @@ function M.block_vis(state)
     { "  " .. fmt_freq(state.centroid), "SCInlineVisual" },
   }
 
-  -- Line 4: waveform
-  local line4 = M.waveform(state.waveform)
+  -- Line 4: waveform (Lua-derived from amp history)
+  local line4 = M.waveform(state.amp_history)
 
   return { line1, line2, line3, line4 }
 end
 
---- Waveform: render 32 bipolar audio samples (-1..+1) as braille.
---- Packs two consecutive samples into left/right columns of each braille char.
---- e.g. "wave ⠉⠑⠒⠤⣀⡠⠤⠒⠊⠉⠑⠒⠤⣀⡠⠔"
-function M.waveform(samples)
+--- Waveform: Lua-derived rolling sine modulated by amp history, rendered as braille.
+--- Shows amplitude as oscillation displacement — louder = bigger wave.
+--- e.g. "wave ⡠⣤⣶⣿⣶⣤⡠⡀⡠⣤⣶⣿⣶⣤⡠⡀"
+function M.waveform(amp_history)
   local WIDTH = 16
-  if not samples or #samples < 2 then
+  if not amp_history or #amp_history == 0 then
+    local mid = vim.fn.nr2char(0x2800 + 0x04 + 0x08)
     return {
       { "wave ", "SCInlineVisualDim" },
-      { string.rep(vim.fn.nr2char(0x2800 + 0x04 + 0x08), WIDTH), "SCInlineVisualDim" }, -- center dots
+      { string.rep(mid, WIDTH), "SCInlineVisualDim" },
     }
   end
 
-  -- Normalize samples to 0..1 (from bipolar -1..+1)
-  local function norm(v)
-    return math.max(0, math.min(1, (v + 1) * 0.5))
-  end
-
+  local t = vim.uv.hrtime() / 1e9
   local chars = {}
-  local step = math.max(1, math.floor(#samples / (WIDTH * 2)))
+  local n = #amp_history
   for i = 0, WIDTH - 1 do
-    local idx1 = math.min(#samples, i * 2 * step + 1)
-    local idx2 = math.min(#samples, (i * 2 + 1) * step + 1)
-    chars[#chars + 1] = braille_pair(norm(samples[idx1] or 0), norm(samples[idx2] or 0))
+    -- Two samples per braille char
+    local function sample(col)
+      local pos = i * 2 + col
+      local hist_idx = n - (WIDTH * 2) + pos + 1
+      local v = (hist_idx >= 1) and (amp_history[hist_idx] or 0) or 0
+      local phase = math.sin((pos / (WIDTH * 2)) * math.pi * 6 + t * 10)
+      local displaced = 0.5 + (v * 0.45 * phase)
+      return math.max(0, math.min(1, displaced))
+    end
+    chars[#chars + 1] = braille_pair(sample(0), sample(1))
   end
 
   return {

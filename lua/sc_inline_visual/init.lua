@@ -224,43 +224,25 @@ function M._install_monitor()
     -- 1. Set up address + storage
     '~scvisAddr = NetAddr("127.0.0.1", 57121); ~scvisNdefMonitors = ~scvisNdefMonitors ? IdentityDictionary.new',
 
-    -- 2. Master monitor SynthDef — ultra-light: ~5 UGens, 1 SendReply at 30fps.
-    --    Only sends amp + centroid. Spectrum/waveform derived from history on Lua side.
-    -- SynthDefs: amp + centroid + 32 waveform samples per frame.
-    -- Waveform uses a RecordBuf ring buffer read back via BufRd at 32 positions.
-    -- Total: ~12 UGens per monitor. 2 SendReplys at 30fps.
+    -- 2. Ultra-light SynthDefs: ~5 UGens, 1 SendReply at 30fps.
+    --    Only amp + centroid. All visuals derived on Lua side.
     table.concat({
       '~scvisStartMonitor = { fork { s.bootSync;',
-      -- Master monitor
       'SynthDef(\\scvis_monitor, {',
-      '  var sig, amp, centroid, chain, trig, buf, phase, waveSamples;',
+      '  var sig, amp, centroid, chain;',
       '  sig = InFeedback.ar(0, 2).sum;',
       '  amp = Amplitude.kr(sig, 0.005, 0.05);',
       '  chain = FFT(LocalBuf(256), sig);',
       '  centroid = SpecCentroid.kr(chain);',
-      '  trig = Impulse.kr(30);',
-      '  SendReply.kr(trig, \'/scvis/data\', [amp, centroid]);',
-      -- Waveform: write audio into a 64-sample ring buffer, snapshot 32 samples on trigger
-      '  buf = LocalBuf(64);',
-      '  phase = Phasor.ar(0, 1, 0, 64);',
-      '  BufWr.ar(sig, buf, phase);',
-      '  waveSamples = Array.fill(32, { |i| BufRd.kr(1, buf, i * 2, 0, 1) });',
-      '  SendReply.kr(trig, \'/scvis/wave\', waveSamples);',
+      '  SendReply.kr(Impulse.kr(30), \'/scvis/data\', [amp, centroid]);',
       '}).add;',
-      -- Per-Ndef monitor
       'SynthDef(\\scvis_ndef_monitor, { |busIndex = 0, targetID = 0|',
-      '  var sig, amp, centroid, chain, trig, buf, phase, waveSamples;',
+      '  var sig, amp, centroid, chain;',
       '  sig = In.ar(busIndex, 2).sum;',
       '  amp = Amplitude.kr(sig, 0.005, 0.05);',
       '  chain = FFT(LocalBuf(256), sig);',
       '  centroid = SpecCentroid.kr(chain);',
-      '  trig = Impulse.kr(30);',
-      '  SendReply.kr(trig, \'/scvis/ndef\', [targetID, amp, centroid]);',
-      '  buf = LocalBuf(64);',
-      '  phase = Phasor.ar(0, 1, 0, 64);',
-      '  BufWr.ar(sig, buf, phase);',
-      '  waveSamples = Array.fill(32, { |i| BufRd.kr(1, buf, i * 2, 0, 1) });',
-      '  SendReply.kr(trig, \'/scvis/ndef_wave\', [targetID] ++ waveSamples);',
+      '  SendReply.kr(Impulse.kr(30), \'/scvis/ndef\', [targetID, amp, centroid]);',
       '}).add;',
       's.sync;',
       '~scvisMonitor = Synth.after(s.defaultGroup, \\scvis_monitor);',
@@ -270,13 +252,11 @@ function M._install_monitor()
     -- 3. Per-Ndef track function
     '~scvisNdefMap = ~scvisNdefMap ? IdentityDictionary.new; ~scvisNdefNextID = ~scvisNdefNextID ? 0; ~scvisTrackNdef = { |name| fork { var ndef, busIdx, tid; s.sync; ndef = Ndef(name.asSymbol); if(ndef.bus.notNil, { busIdx = ndef.bus.index; tid = ~scvisNdefMap.at(name.asSymbol); if(tid.isNil, { tid = ~scvisNdefNextID; ~scvisNdefNextID = ~scvisNdefNextID + 1; ~scvisNdefMap.put(name.asSymbol, tid) }); ~scvisNdefMonitors.put(name.asSymbol, Synth.after(ndef.group, \\scvis_ndef_monitor, [\\busIndex, busIdx, \\targetID, tid])); ("SCInlineVisual: tracking Ndef " ++ name ++ " bus:" ++ busIdx ++ " id:" ++ tid).postln }) } }',
 
-    -- 4. OSCdefs — .fix survives CmdPeriod
+    -- 4. OSCdef for master bus — .fix survives CmdPeriod
     'OSCdef(\\scvisReply).free; OSCdef(\\scvisReply, { |msg| ~scvisAddr.sendMsg("/sc/analysis", "_master", msg[3], msg[4]) }, \'/scvis/data\').fix',
-    'OSCdef(\\scvisWaveReply).free; OSCdef(\\scvisWaveReply, { |msg| ~scvisAddr.sendMsg("/sc/waveform", "_master", *msg[3..34]) }, \'/scvis/wave\').fix',
 
-    -- 5. OSCdefs for per-Ndef data
+    -- 5. OSCdef for per-Ndef data
     'OSCdef(\\scvisNdefReply).free; OSCdef(\\scvisNdefReply, { |msg| var tid = msg[3].asInteger; var amp = msg[4]; var centroid = msg[5]; var name = ~scvisNdefMap.findKeyForValue(tid); if(name.notNil, { ~scvisAddr.sendMsg("/sc/analysis", name.asString, amp, centroid) }) }, \'/scvis/ndef\').fix',
-    'OSCdef(\\scvisNdefWaveReply).free; OSCdef(\\scvisNdefWaveReply, { |msg| var tid = msg[3].asInteger; var name = ~scvisNdefMap.findKeyForValue(tid); if(name.notNil, { ~scvisAddr.sendMsg("/sc/waveform", name.asString, *msg[4..35]) }) }, \'/scvis/ndef_wave\').fix',
 
     -- 6. CmdPeriod handler — restart master + clear ndef monitors.
     --    Do NOT call .free on monitors (CmdPeriod already freed all synths).
