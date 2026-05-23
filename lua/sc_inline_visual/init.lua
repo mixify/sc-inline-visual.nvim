@@ -224,24 +224,22 @@ function M._install_monitor()
     -- 1. Set up address + storage
     '~scvisAddr = NetAddr("127.0.0.1", 57121); ~scvisNdefMonitors = ~scvisNdefMonitors ? IdentityDictionary.new',
 
-    -- 2. Ultra-light SynthDefs: ~5 UGens, 1 SendReply at 30fps.
-    --    Only amp + centroid. All visuals derived on Lua side.
+    -- 2. SynthDefs: amp + centroid + 16-sample waveform (one cycle via Phasor sync).
+    -- Ultra-light: ~5 UGens, 1 SendReply at 30fps. Just amp + centroid.
     table.concat({
       '~scvisStartMonitor = { fork { s.bootSync;',
       'SynthDef(\\scvis_monitor, {',
-      '  var sig, amp, centroid, chain;',
-      '  sig = InFeedback.ar(0, 2).sum;',
-      '  amp = Amplitude.kr(sig, 0.005, 0.05);',
-      '  chain = FFT(LocalBuf(256), sig);',
-      '  centroid = SpecCentroid.kr(chain);',
+      '  var sig = InFeedback.ar(0, 2).sum;',
+      '  var amp = Amplitude.kr(sig, 0.005, 0.05);',
+      '  var chain = FFT(LocalBuf(256), sig);',
+      '  var centroid = SpecCentroid.kr(chain);',
       '  SendReply.kr(Impulse.kr(30), \'/scvis/data\', [amp, centroid]);',
       '}).add;',
       'SynthDef(\\scvis_ndef_monitor, { |busIndex = 0, targetID = 0|',
-      '  var sig, amp, centroid, chain;',
-      '  sig = In.ar(busIndex, 2).sum;',
-      '  amp = Amplitude.kr(sig, 0.005, 0.05);',
-      '  chain = FFT(LocalBuf(256), sig);',
-      '  centroid = SpecCentroid.kr(chain);',
+      '  var sig = In.ar(busIndex, 2).sum;',
+      '  var amp = Amplitude.kr(sig, 0.005, 0.05);',
+      '  var chain = FFT(LocalBuf(256), sig);',
+      '  var centroid = SpecCentroid.kr(chain);',
       '  SendReply.kr(Impulse.kr(30), \'/scvis/ndef\', [targetID, amp, centroid]);',
       '}).add;',
       's.sync;',
