@@ -2,6 +2,7 @@
 -- Compact 2-line display per block with braille density + freq position bar.
 
 local widgets = require("sc_inline_visual.widgets")
+local pattern = require("sc_inline_visual.pattern")
 
 local M = {}
 
@@ -77,8 +78,22 @@ function M.render(bufnr, all_states)
 
     local col_offset = block_max_width(lines, s.start_line, s.end_line) + 4
 
-    -- Core: 2-line braille visualization
+    -- Core: audio visualization
     local vis_rows = widgets.block_vis(s)
+
+    -- Pattern preview: parse block source for Pbind patterns
+    local block_source_lines = {}
+    for i = s.start_line + 1, math.min(s.end_line + 1, #lines) do
+      block_source_lines[#block_source_lines + 1] = lines[i] or ""
+    end
+    local block_source = table.concat(block_source_lines, "\n")
+    local pat_params = pattern.parse_pbind(block_source)
+    if pat_params then
+      local pat_rows = widgets.pattern_preview(pat_params)
+      for _, row in ipairs(pat_rows) do
+        vis_rows[#vis_rows + 1] = row
+      end
+    end
 
     -- Optional: params, events
     local param_names = {}

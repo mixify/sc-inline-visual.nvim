@@ -186,6 +186,115 @@ function M.block_vis(state)
   return { line1, line2, line3 }
 end
 
+--- Pattern preview: render parsed Pbind patterns as visual rows.
+--- Returns a list of segment rows.
+function M.pattern_preview(params)
+  if not params or #params == 0 then return {} end
+
+  local pattern = require("sc_inline_visual.pattern")
+  local rows = {}
+
+  -- Separator
+  rows[#rows + 1] = { { "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌", "SCInlineVisualDim" } }
+
+  for _, p in ipairs(params) do
+    local label = string.format("%-5s", p.key:sub(1, 4))
+
+    if p.values then
+      if p.key == "dur" then
+        -- Rhythm: proportional width blocks
+        local total = 0
+        for _, v in ipairs(p.values) do total = total + v end
+        local WIDTH = 20
+        local chars = {}
+        for _, v in ipairs(p.values) do
+          local w = math.max(1, math.floor(v / total * WIDTH + 0.5))
+          if w == 1 then
+            chars[#chars + 1] = "▎"
+          elseif w == 2 then
+            chars[#chars + 1] = "▍▎"
+          else
+            chars[#chars + 1] = "█" .. string.rep("─", w - 2) .. "▎"
+          end
+        end
+        rows[#rows + 1] = {
+          { "  " .. label, "SCInlineVisualDim" },
+          { table.concat(chars), "SCInlineVisualAmpMid" },
+        }
+
+      elseif p.key == "degree" then
+        -- Note names from scale degrees
+        local notes = {}
+        for _, v in ipairs(p.values) do
+          notes[#notes + 1] = pattern.degree_to_note(math.floor(v))
+        end
+        rows[#rows + 1] = {
+          { "  " .. label, "SCInlineVisualDim" },
+          { table.concat(notes, " "), "SCInlineVisualHeader" },
+        }
+
+      elseif p.key == "midinote" or p.key == "note" then
+        -- MIDI note names
+        local notes = {}
+        for _, v in ipairs(p.values) do
+          notes[#notes + 1] = pattern.midi_to_note(math.floor(v))
+        end
+        rows[#rows + 1] = {
+          { "  " .. label, "SCInlineVisualDim" },
+          { table.concat(notes, " "), "SCInlineVisualHeader" },
+        }
+
+      elseif p.key == "amp" then
+        -- Volume per step as block chars
+        local chars = {}
+        for _, v in ipairs(p.values) do
+          local idx = math.floor(math.max(0, math.min(1, v)) * 7) + 1
+          chars[#chars + 1] = BLOCK_CHARS[idx]
+        end
+        rows[#rows + 1] = {
+          { "  " .. label, "SCInlineVisualDim" },
+          { table.concat(chars, " "), amp_hl(p.values[1] or 0) },
+        }
+
+      elseif p.key == "freq" then
+        -- Frequencies as note names
+        local notes = {}
+        for _, v in ipairs(p.values) do
+          notes[#notes + 1] = freq_to_note(v)
+        end
+        rows[#rows + 1] = {
+          { "  " .. label, "SCInlineVisualDim" },
+          { table.concat(notes, " "), "SCInlineVisualCentroid" },
+        }
+
+      else
+        -- Generic: show values
+        local strs = {}
+        for _, v in ipairs(p.values) do
+          if v == math.floor(v) then
+            strs[#strs + 1] = string.format("%.0f", v)
+          else
+            strs[#strs + 1] = string.format("%.2g", v)
+          end
+        end
+        rows[#rows + 1] = {
+          { "  " .. label, "SCInlineVisualDim" },
+          { table.concat(strs, " "), "SCInlineVisual" },
+        }
+      end
+
+    elseif p.range then
+      -- Pwhite range
+      rows[#rows + 1] = {
+        { "  " .. label, "SCInlineVisualDim" },
+        { string.format("~%.2g..%.2g", p.range[1], p.range[2]), "SCInlineVisual" },
+      }
+    end
+  end
+
+  return rows
+end
+
 --- Parameter bar: label + filled/empty bar + value.
 function M.param_bar(label, value)
   if type(value) ~= "number" then
