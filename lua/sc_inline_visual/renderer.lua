@@ -1,6 +1,5 @@
 -- Render visual annotations using Neovim extmarks with virtual text.
--- Widgets return multi-segment virt_text for per-element highlighting.
--- Uses cached buffer lines, dirty-flag rendering, and virt_lines overflow.
+-- Compact 2-line display per block with braille density + freq position bar.
 
 local widgets = require("sc_inline_visual.widgets")
 
@@ -9,7 +8,6 @@ local M = {}
 local ns_id = nil
 local buf_lines_cache = nil
 local buf_lines_tick = -1
-local last_render_tick = -1 -- state version counter for dirty checks
 
 local function ensure_hl()
   vim.api.nvim_set_hl(0, "SCInlineVisual", { fg = "#888888", default = true })
@@ -36,7 +34,6 @@ function M.clear(bufnr)
   buf_lines_tick = -1
 end
 
---- Get buffer lines, cached by changedtick.
 local function get_buf_lines(bufnr)
   local tick = vim.api.nvim_buf_get_changedtick(bufnr)
   if tick ~= buf_lines_tick then
@@ -46,7 +43,6 @@ local function get_buf_lines(bufnr)
   return buf_lines_cache
 end
 
---- Find the max display width of lines in a block for adaptive column offset.
 local function block_max_width(lines, start_line, end_line)
   local max_w = 0
   for i = start_line + 1, math.min(end_line + 1, #lines) do
@@ -56,12 +52,10 @@ local function block_max_width(lines, start_line, end_line)
   return max_w
 end
 
---- Prepend padding segments to a widget's segments for column alignment.
 local function pad_segments(segments, line_text, col_offset)
   local line_len = vim.fn.strdisplaywidth(line_text or "")
   local pad = col_offset - line_len
   if pad < 2 then pad = 2 end
-  -- Insert padding as first segment
   local result = { { string.rep(" ", pad), "" } }
   for _, seg in ipairs(segments) do
     result[#result + 1] = seg
@@ -74,77 +68,45 @@ function M.render(bufnr, all_states)
   if not vim.api.nvim_buf_is_valid(bufnr) then return end
 
   vim.api.nvim_buf_clear_namespace(bufnr, ns_id, 0, -1)
-
   local lines = get_buf_lines(bufnr)
 
   for _, s in pairs(all_states) do
     if not s.active then goto continue end
 
-    -- Adaptive column: max line width in block + 4 padding
     local col_offset = block_max_width(lines, s.start_line, s.end_line) + 4
 
-    -- Build widget rows — each is a list of {text, hl} segments
-    local display_name = s.target:gsub("^scvis_", "")
-    local rows = {}
+    -- Core: 2-line braille visualization
+    local vis_rows = widgets.block_vis(s)
 
-    -- Header
-    rows[#rows + 1] = { { "╶ " .. display_name, "SCInlineVisualHeader" } }
-
-    -- Amp meter + sparkline
-    local amp_row = widgets.meter("amp", s.amp, 1.0)
-    -- Append sparkline segments
-    amp_row[#amp_row + 1] = { " ", "" }
-    for _, seg in ipairs(widgets.sparkline(s.amp_history, "SCInlineVisualBright")) do
-      amp_row[#amp_row + 1] = seg
-    end
-    rows[#rows + 1] = amp_row
-
-    -- Spectrum
-    rows[#rows + 1] = widgets.spectrum(s.centroid, s.amp)
-
-    -- Waveform
-    rows[#rows + 1] = widgets.waveform(s.amp_history)
-
-    -- Centroid
-    if s.centroid > 0 then
-      rows[#rows + 1] = widgets.centroid(s.centroid, s.centroid_history)
-    end
-
-    -- Params
+    -- Optional: params, events
     local param_names = {}
     for name, _ in pairs(s.params) do
       param_names[#param_names + 1] = name
     end
     table.sort(param_names)
     for _, name in ipairs(param_names) do
-      rows[#rows + 1] = widgets.param_bar(name, s.params[name])
+      vis_rows[#vis_rows + 1] = widgets.param_bar(name, s.params[name])
     end
-
-    -- Events
     if #s.events > 0 then
-      rows[#rows + 1] = widgets.event_timeline(s.events)
+      vis_rows[#vis_rows + 1] = widgets.event_timeline(s.events)
     end
 
-    -- Place rows: inline on block lines, overflow as virt_lines below block
+    -- Place rows on buffer lines, overflow as virt_lines
     local block_len = s.end_line - s.start_line + 1
-    for i, row in ipairs(rows) do
+    for i, row in ipairs(vis_rows) do
       local line_idx = s.start_line + (i - 1)
 
       if i <= block_len and line_idx < #lines then
-        -- Inline: append as virtual text at end of line
         local line_text = lines[line_idx + 1] or ""
-        local padded = pad_segments(row, line_text, col_offset)
         vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_idx, 0, {
-          virt_text = padded,
+          virt_text = pad_segments(row, line_text, col_offset),
           virt_text_pos = "eol",
           hl_mode = "combine",
         })
       else
-        -- Overflow: place as virt_lines below the last block line
         local overflow_line = math.min(s.end_line, #lines - 1)
-        local padded = pad_segments(row, "", col_offset)
         vim.api.nvim_buf_set_extmark(bufnr, ns_id, overflow_line, 0, {
-          virt_lines = { padded },
+          virt_lines = { pad_segments(row, "", col_offset) },
           virt_lines_above = false,
         })
       end

@@ -22,6 +22,7 @@ local function new_state(block)
     end_line = block.end_line,
     amp_history = {},
     centroid_history = {},
+    waveform = {},
     amp = 0,
     centroid = 0,
     params = {},
@@ -124,6 +125,9 @@ local function apply_update(s, msg_type, ...)
     if #events > EVENT_HISTORY_LEN then
       table.remove(events, 1)
     end
+  elseif msg_type == "waveform" then
+    local samples = ...
+    if samples then s.waveform = samples end
   elseif msg_type == "param" then
     local name, value = ...
     if name then

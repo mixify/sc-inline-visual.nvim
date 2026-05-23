@@ -130,6 +130,13 @@ function M.start(callback)
       vim.schedule(function()
         callback("param", args[1], args[2], args[3])
       end)
+    elseif osc_addr == "/sc/waveform" and #args >= 2 then
+      local target = args[1]
+      local samples = {}
+      for i = 2, #args do samples[#samples + 1] = args[i] end
+      vim.schedule(function()
+        callback("waveform", target, samples)
+      end)
     end
   end)
 end

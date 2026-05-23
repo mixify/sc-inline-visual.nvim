@@ -1,150 +1,163 @@
--- Small visual widgets rendered as structured segments.
--- Each widget returns a list of {text, hl_group} pairs for multi-color rendering.
+-- Visual widgets using braille characters for dense display.
+-- Each widget returns a list of {text, hl_group} segments.
 
 local M = {}
 
 local BLOCK_CHARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
-local FILLED = "█"
-local EMPTY = "░"
-local METER_WIDTH = 8
 
-local function block_char(v)
-  v = math.max(0, math.min(1, v))
-  return BLOCK_CHARS[math.floor(v * 7) + 1]
+-- Braille: 2x4 dot matrix per character (U+2800..U+28FF)
+-- Left column dots (bottom to top): 7, 3, 2, 1
+-- Right column dots (bottom to top): 8, 6, 5, 4
+local LEFT_DOTS  = { 0x40, 0x04, 0x02, 0x01 }
+local RIGHT_DOTS = { 0x80, 0x20, 0x10, 0x08 }
+
+--- Pack two values (0..1) into one braille character.
+--- Left column = v1 (4 levels), Right column = v2 (4 levels).
+local function braille_pair(v1, v2)
+  local l = math.floor(math.max(0, math.min(1, v1)) * 4 + 0.5)
+  local r = math.floor(math.max(0, math.min(1, v2)) * 4 + 0.5)
+  local code = 0x2800
+  for i = 1, math.min(l, 4) do code = code + LEFT_DOTS[i] end
+  for i = 1, math.min(r, 4) do code = code + RIGHT_DOTS[i] end
+  return vim.fn.nr2char(code)
 end
 
---- Sparkline: history as block characters.
---- Returns segments: { {chars, hl} }
-function M.sparkline(history, hl)
-  local WIDTH = 16
+--- Single-column braille sparkline (one value per dot column).
+local function braille_sparkline(values, width)
+  width = width or 12
   local chars = {}
-  if #history > 0 then
-    local start = math.max(1, #history - (WIDTH - 1))
-    for i = start, #history do
-      chars[#chars + 1] = block_char(history[i])
-    end
+  local n = #values
+  -- Pack pairs of consecutive values
+  local start = math.max(1, n - (width * 2) + 1)
+  local vals = {}
+  for i = start, n do vals[#vals + 1] = values[i] end
+  -- Pad to even count
+  while #vals < width * 2 do table.insert(vals, 1, 0) end
+
+  for i = 1, #vals - 1, 2 do
+    chars[#chars + 1] = braille_pair(vals[i], vals[i + 1])
   end
-  while #chars < WIDTH do
-    table.insert(chars, 1, "▁")
-  end
-  return { { table.concat(chars), hl or "SCInlineVisualDim" } }
+  return table.concat(chars)
 end
 
---- Meter: label + filled bar + empty bar + value.
---- Returns segments with different highlights.
-function M.meter(label, value, max_val)
-  max_val = max_val or 1.0
-  local ratio = math.max(0, math.min(1, value / max_val))
-  local filled = math.floor(ratio * METER_WIDTH + 0.5)
-  local empty = METER_WIDTH - filled
-
-  return {
-    { string.format("%-5s", label), "SCInlineVisualDim" },
-    { string.rep(FILLED, filled), "SCInlineVisualBright" },
-    { string.rep(EMPTY, empty), "SCInlineVisualDim" },
-    { " " .. string.format("%.2f", value), "SCInlineVisual" },
-  }
-end
-
---- Centroid sparkline: spectral centroid movement over time.
-function M.centroid(value, history)
-  local WIDTH = 16
-  local MIN_FREQ = 50
-  local MAX_FREQ = 10000
-  local log_range = math.log(MAX_FREQ / MIN_FREQ)
-
+--- Dual braille sparkline: overlay two histories in one line.
+--- Left dots = history1 (e.g. amplitude), Right dots = history2 (e.g. centroid normalized).
+local function braille_dual(hist1, hist2, width)
+  width = width or 12
   local chars = {}
-  if history and #history > 0 then
-    local start = math.max(1, #history - (WIDTH - 1))
-    for i = start, #history do
-      local v = history[i]
-      if v > MIN_FREQ then
-        local ratio = math.log(v / MIN_FREQ) / log_range
-        chars[#chars + 1] = block_char(math.max(0, math.min(1, ratio)))
-      else
-        chars[#chars + 1] = "▁"
-      end
-    end
-  end
-  while #chars < WIDTH do
-    table.insert(chars, 1, "▁")
+
+  -- Normalize hist2 (centroid) to 0..1 via log scale
+  local MIN_F, MAX_F = 50, 10000
+  local log_range = math.log(MAX_F / MIN_F)
+  local function norm_freq(f)
+    if f <= MIN_F then return 0 end
+    return math.max(0, math.min(1, math.log(f / MIN_F) / log_range))
   end
 
-  local val_str
+  -- Take last `width` values from each
+  local n1, n2 = #hist1, #hist2
+  for i = 1, width do
+    local idx1 = n1 - width + i
+    local idx2 = n2 - width + i
+    local v1 = (idx1 >= 1) and (hist1[idx1] or 0) or 0
+    local v2 = (idx2 >= 1) and norm_freq(hist2[idx2] or 0) or 0
+    chars[#chars + 1] = braille_pair(v1, v2)
+  end
+  return table.concat(chars)
+end
+
+--- Frequency position bar: shows WHERE the sound is on a lo-hi scale.
+--- e.g. "lo░░░▓▓░░hi"
+local function freq_position(centroid, width)
+  width = width or 10
+  local MIN_F, MAX_F = 50, 10000
+
+  local slots = {}
+  for i = 1, width do slots[i] = "░" end
+
+  if centroid > MIN_F then
+    local ratio = math.log(centroid / MIN_F) / math.log(MAX_F / MIN_F)
+    ratio = math.max(0, math.min(1, ratio))
+    local pos = math.floor(ratio * (width - 1)) + 1
+    -- Fill 2 chars wide for visibility
+    slots[pos] = "▓"
+    if pos > 1 then slots[pos - 1] = "▒" end
+    if pos < width then slots[pos + 1] = "▒" end
+  end
+
+  return table.concat(slots)
+end
+
+--- Format frequency value for display.
+local function fmt_freq(value)
   if value >= 1000 then
-    val_str = string.format("%.1fk", value / 1000)
+    return string.format("%.1fk", value / 1000)
   elseif value > 0 then
-    val_str = string.format("%.0f", value)
-  else
-    val_str = "—"
+    return string.format("%.0f", value)
   end
+  return "—"
+end
 
-  return {
+--- Main visualization: 4-line display per block.
+--- Line 1: target name
+--- Line 2: amp — braille sparkline + value
+--- Line 3: freq — position bar on lo-hi scale + value
+--- Line 4: wave — actual waveform shape as braille
+--- Returns list of segment rows.
+function M.block_vis(state)
+  local display_name = state.target:gsub("^scvis_", "")
+
+  -- Line 1: header
+  local line1 = {
+    { "╶ ", "SCInlineVisualDim" },
+    { display_name, "SCInlineVisualHeader" },
+  }
+
+  -- Line 2: amp sparkline + value
+  local amp_braille = braille_sparkline(state.amp_history, 14)
+  local line2 = {
+    { "amp  ", "SCInlineVisualDim" },
+    { amp_braille, "SCInlineVisualBright" },
+    { "  " .. string.format("%.2f", state.amp), "SCInlineVisual" },
+  }
+
+  -- Line 3: freq position bar
+  local fbar = freq_position(state.centroid, 14)
+  local line3 = {
     { "freq ", "SCInlineVisualDim" },
-    { table.concat(chars), "SCInlineVisualCentroid" },
-    { "  " .. val_str, "SCInlineVisual" },
+    { fbar, "SCInlineVisualCentroid" },
+    { "  " .. fmt_freq(state.centroid), "SCInlineVisual" },
   }
+
+  -- Line 4: waveform
+  local line4 = M.waveform(state.waveform)
+
+  return { line1, line2, line3, line4 }
 end
 
---- Spectrum: synthetic bell curve from centroid + amp.
-function M.spectrum(centroid, amp)
-  local WIDTH = 8
-  local MIN_FREQ = 50
-  local MAX_FREQ = 10000
-
-  if amp < 0.005 then
-    return {
-      { "spec ", "SCInlineVisualDim" },
-      { string.rep("▁", WIDTH), "SCInlineVisualDim" },
-      { " lo    hi", "SCInlineVisualDim" },
-    }
-  end
-
-  local center = 0.5
-  if centroid > MIN_FREQ then
-    center = math.log(centroid / MIN_FREQ) / math.log(MAX_FREQ / MIN_FREQ)
-    center = math.max(0, math.min(1, center))
-  end
-
-  local chars = {}
-  for i = 1, WIDTH do
-    local pos = (i - 0.5) / WIDTH
-    local dist = math.abs(pos - center)
-    local v = amp * math.exp(-dist * dist * 20)
-    chars[#chars + 1] = block_char(v)
-  end
-
-  return {
-    { "spec ", "SCInlineVisualDim" },
-    { table.concat(chars), "SCInlineVisualBright" },
-    { " lo    hi", "SCInlineVisualDim" },
-  }
-end
-
---- Waveform: rolling sine modulated by amp history.
-function M.waveform(amp_history)
+--- Waveform: render 32 bipolar audio samples (-1..+1) as braille.
+--- Packs two consecutive samples into left/right columns of each braille char.
+--- e.g. "wave ⠉⠑⠒⠤⣀⡠⠤⠒⠊⠉⠑⠒⠤⣀⡠⠔"
+function M.waveform(samples)
   local WIDTH = 16
-
-  if not amp_history or #amp_history == 0 then
+  if not samples or #samples < 2 then
     return {
       { "wave ", "SCInlineVisualDim" },
-      { string.rep("▄", WIDTH), "SCInlineVisualDim" },
+      { string.rep(vim.fn.nr2char(0x2800 + 0x04 + 0x08), WIDTH), "SCInlineVisualDim" }, -- center dots
     }
   end
 
-  local t = vim.uv.hrtime() / 1e9
-  local chars = {}
-  local start = math.max(1, #amp_history - (WIDTH - 1))
-  local n = 0
-  for i = start, #amp_history do
-    local v = amp_history[i] or 0
-    local phase = math.sin((n / WIDTH) * math.pi * 4 + t * 8)
-    local displaced = 0.5 + (v * 0.45 * phase)
-    chars[#chars + 1] = block_char(displaced)
-    n = n + 1
+  -- Normalize samples to 0..1 (from bipolar -1..+1)
+  local function norm(v)
+    return math.max(0, math.min(1, (v + 1) * 0.5))
   end
-  while #chars < WIDTH do
-    table.insert(chars, 1, "▄")
+
+  local chars = {}
+  local step = math.max(1, math.floor(#samples / (WIDTH * 2)))
+  for i = 0, WIDTH - 1 do
+    local idx1 = math.min(#samples, i * 2 * step + 1)
+    local idx2 = math.min(#samples, (i * 2 + 1) * step + 1)
+    chars[#chars + 1] = braille_pair(norm(samples[idx1] or 0), norm(samples[idx2] or 0))
   end
 
   return {
@@ -153,7 +166,7 @@ function M.waveform(amp_history)
   }
 end
 
---- Parameter bar: label + bar + value.
+--- Parameter bar: label + filled/empty bar + value.
 function M.param_bar(label, value)
   if type(value) ~= "number" then
     return {
@@ -163,31 +176,24 @@ function M.param_bar(label, value)
   end
 
   local ratio
-  if value <= 0 then
-    ratio = 0
-  elseif value <= 1 then
-    ratio = value
-  else
-    ratio = math.log(value) / math.log(20000)
-    ratio = math.max(0, math.min(1, ratio))
+  if value <= 0 then ratio = 0
+  elseif value <= 1 then ratio = value
+  else ratio = math.max(0, math.min(1, math.log(value) / math.log(20000)))
   end
 
-  local filled = math.floor(ratio * METER_WIDTH + 0.5)
-  local empty = METER_WIDTH - filled
+  local filled = math.floor(ratio * 8 + 0.5)
+  local empty = 8 - filled
 
   local val_str
-  if value >= 100 then
-    val_str = string.format("%.0f", value)
-  elseif value >= 1 then
-    val_str = string.format("%.1f", value)
-  else
-    val_str = string.format("%.2f", value)
+  if value >= 100 then val_str = string.format("%.0f", value)
+  elseif value >= 1 then val_str = string.format("%.1f", value)
+  else val_str = string.format("%.2f", value)
   end
 
   return {
     { string.format("%-5s", label:sub(1, 4)), "SCInlineVisualDim" },
-    { string.rep(FILLED, filled), "SCInlineVisualBright" },
-    { string.rep(EMPTY, empty), "SCInlineVisualDim" },
+    { string.rep("█", filled), "SCInlineVisualBright" },
+    { string.rep("░", empty), "SCInlineVisualDim" },
     { " " .. val_str, "SCInlineVisual" },
   }
 end
