@@ -122,14 +122,39 @@ local function freq_bar(centroid, centroid_history, width)
   return table.concat(slots)
 end
 
---- Format frequency value for display.
-local function fmt_freq(value)
-  if value >= 1000 then
-    return string.format("%.1fk", value / 1000)
-  elseif value > 0 then
-    return string.format("%.0f", value)
+--- Convert frequency to nearest note name + cents offset.
+--- e.g. 440 → "A4", 466 → "A#4+23"
+local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
+
+local function freq_to_note(hz)
+  if hz <= 0 then return "—" end
+  -- MIDI note number from frequency (A4 = 69 = 440Hz)
+  local midi = 69 + 12 * math.log(hz / 440) / math.log(2)
+  local note_num = math.floor(midi + 0.5)
+  local cents = math.floor((midi - note_num) * 100 + 0.5)
+  local name = NOTE_NAMES[(note_num % 12) + 1]
+  local octave = math.floor(note_num / 12) - 1
+
+  local result = name .. octave
+  if cents > 5 then
+    result = result .. "+" .. cents
+  elseif cents < -5 then
+    result = result .. cents
   end
-  return "—"
+  return result
+end
+
+--- Format frequency: note name + Hz.
+local function fmt_freq(value)
+  if value <= 0 then return "—" end
+  local note = freq_to_note(value)
+  local hz
+  if value >= 1000 then
+    hz = string.format("%.1fk", value / 1000)
+  else
+    hz = string.format("%.0f", value)
+  end
+  return note .. " " .. hz
 end
 
 --- Main visualization: 3-line display per block.
