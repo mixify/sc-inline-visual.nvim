@@ -186,6 +186,144 @@ function M.block_vis(state)
   return { line1, line2, line3 }
 end
 
+--- Envelope preview: render an Env shape as a multi-row braille bar chart.
+--- Input: { kind = "perc"|"adsr"|..., points = { {t,v}, ... } }
+--- Returns a list of rows (rather than a single row).
+function M.env_preview(env)
+  if not env or not env.points or #env.points < 2 then return nil end
+  local pts = env.points
+  local total_t = pts[#pts].t
+  if total_t <= 0 then return nil end
+
+  local max_v = 0
+  for _, p in ipairs(pts) do
+    if math.abs(p.v) > max_v then max_v = math.abs(p.v) end
+  end
+  if max_v == 0 then max_v = 1 end
+
+  local function level_at(t)
+    if t <= pts[1].t then return pts[1].v / max_v end
+    for i = 2, #pts do
+      if t <= pts[i].t then
+        local span = pts[i].t - pts[i - 1].t
+        local frac = span > 0 and (t - pts[i - 1].t) / span or 0
+        return (pts[i - 1].v + frac * (pts[i].v - pts[i - 1].v)) / max_v
+      end
+    end
+    return pts[#pts].v / max_v
+  end
+
+  local WIDTH = 22                  -- chars per row
+  local ROWS = 3                    -- braille rows → 12 vertical levels
+  local SLOTS = WIDTH * 2
+  local V_MAX = ROWS * 4
+
+  -- Per-slot normalized level (0..1)
+  local levels = {}
+  for i = 0, SLOTS - 1 do
+    local t = (i / (SLOTS - 1)) * total_t
+    levels[i + 1] = math.max(0, math.min(1, level_at(t)))
+  end
+
+  -- Style selection: filled bars for short envelopes (ADSR-like),
+  -- thin line plot for waveform-like envelopes (many breakpoints).
+  local use_line_plot = #pts >= 10
+
+  -- ── Filled-bar renderer ──
+  local function row_chars_bar(r) -- r: 0=top, ROWS-1=bottom
+    local offset = (ROWS - 1 - r) * 4
+    local chars = {}
+    for i = 1, SLOTS, 2 do
+      local left = math.max(0, math.min(4, math.floor(levels[i] * V_MAX + 0.5) - offset))
+      local right = math.max(0, math.min(4, math.floor(levels[i + 1] * V_MAX + 0.5) - offset))
+      local code = 0x2800
+      for j = 1, left do code = code + LEFT_DOTS[j] end
+      for j = 1, right do code = code + RIGHT_DOTS[j] end
+      chars[#chars + 1] = vim.fn.nr2char(code)
+    end
+    return table.concat(chars)
+  end
+
+  -- ── Line-plot renderer (drawille-style; vertically connected) ──
+  -- Build a SLOTS × V_MAX boolean pixel grid, then encode each ROW slice.
+  local pixels = nil
+  local function build_pixels()
+    pixels = {}
+    for y = 0, V_MAX - 1 do
+      pixels[y] = {}
+      for x = 1, SLOTS do pixels[y][x] = false end
+    end
+    local function plot(x, y)
+      if y < 0 or y >= V_MAX or x < 1 or x > SLOTS then return end
+      pixels[y][x] = true
+    end
+    local prev_y
+    for x = 1, SLOTS do
+      -- y=0 at top, V_MAX-1 at bottom; high level → low y
+      local y = math.floor((1 - levels[x]) * (V_MAX - 1) + 0.5)
+      if prev_y and math.abs(prev_y - y) > 1 then
+        local lo, hi = math.min(prev_y, y), math.max(prev_y, y)
+        for yy = lo, hi do plot(x, yy) end
+      else
+        plot(x, y)
+      end
+      prev_y = y
+    end
+  end
+
+  local function row_chars_line(r) -- r: 0=top, ROWS-1=bottom
+    if not pixels then build_pixels() end
+    local chars = {}
+    for c = 1, WIDTH do
+      local lx, rx = (c - 1) * 2 + 1, (c - 1) * 2 + 2
+      local code = 0x2800
+      for dot = 0, 3 do                 -- 0=top dot of this row
+        local y = r * 4 + dot
+        local idx = 4 - dot             -- LEFT_DOTS index (1=bottom, 4=top)
+        if pixels[y][lx] then code = code + LEFT_DOTS[idx] end
+        if pixels[y][rx] then code = code + RIGHT_DOTS[idx] end
+      end
+      chars[#chars + 1] = vim.fn.nr2char(code)
+    end
+    return table.concat(chars)
+  end
+
+  local row_chars = use_line_plot and row_chars_line or row_chars_bar
+
+  local ROW_HL = {
+    [3] = { "SCInlineVisualAmpHot", "SCInlineVisualAmpHigh", "SCInlineVisualAmpLow" },
+    [2] = { "SCInlineVisualAmpHigh", "SCInlineVisualAmpLow" },
+    [1] = { "SCInlineVisualAmpMid" },
+  }
+  local hls = ROW_HL[ROWS] or { "SCInlineVisualAmpMid" }
+
+  local label
+  if total_t < 1 then
+    label = string.format("%.0fms", total_t * 1000)
+  else
+    label = string.format("%.2fs", total_t)
+  end
+
+  local rows = {}
+  for r = 0, ROWS - 1 do
+    local row
+    if r == 0 then
+      row = {
+        { "env  ", "SCInlineVisualDim" },
+        { row_chars(r), hls[r + 1] or "SCInlineVisualAmpMid" },
+        { "  " .. env.kind .. " " .. label, "SCInlineVisualDim" },
+      }
+    else
+      row = {
+        { "     ", "SCInlineVisualDim" },
+        { row_chars(r), hls[r + 1] or "SCInlineVisualAmpMid" },
+      }
+    end
+    rows[#rows + 1] = row
+  end
+  return rows
+end
+
 --- Pattern preview: render parsed Pbind patterns as visual rows.
 --- Returns a list of segment rows.
 function M.pattern_preview(params)

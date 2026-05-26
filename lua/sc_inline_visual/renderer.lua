@@ -3,6 +3,7 @@
 
 local widgets = require("sc_inline_visual.widgets")
 local pattern = require("sc_inline_visual.pattern")
+local env_parser = require("sc_inline_visual.env")
 
 local M = {}
 
@@ -92,6 +93,17 @@ function M.render(bufnr, all_states)
       local pat_rows = widgets.pattern_preview(pat_params)
       for _, row in ipairs(pat_rows) do
         vis_rows[#vis_rows + 1] = row
+      end
+    end
+
+    -- Envelope preview: parse Env.perc/adsr/etc. or bare Env([...],[...])
+    local env_info = env_parser.parse(block_source)
+    if env_info then
+      local env_rows = widgets.env_preview(env_info)
+      if env_rows then
+        for _, row in ipairs(env_rows) do
+          vis_rows[#vis_rows + 1] = row
+        end
       end
     end
 
