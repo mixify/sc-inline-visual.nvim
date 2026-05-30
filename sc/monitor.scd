@@ -10,7 +10,7 @@
 //   ~scvisParentMonitors  per-block FFT/amp monitor
 //   ~scvisNdefMap         parent name -> tid (stable across CmdPeriod for OSC routing)
 (
-~scvisAddr = NetAddr("127.0.0.1", 57121);
+~scvisAddr = NetAddr("127.0.0.1", {{PORT}});
 
 [\scvisNdefMonitors, \scvisParentBuses, \scvisParentRouters, \scvisParentMonitors]
     .do { |k| currentEnvironment[k] = currentEnvironment[k] ? IdentityDictionary.new };
@@ -27,7 +27,7 @@
             var amp = Amplitude.kr(sig, 0.005, 0.05);
             var chain = FFT(LocalBuf(256), sig);
             var centroid = SpecCentroid.kr(chain);
-            SendReply.kr(Impulse.kr(30), '/scvis/data', [amp, centroid]);
+            SendReply.kr(Impulse.kr({{FPS}}), '/scvis/data', [amp, centroid]);
         }).add;
 
         SynthDef(\scvis_ndef_monitor, { |busIndex = 0, targetID = 0|
@@ -35,7 +35,7 @@
             var amp = Amplitude.kr(sig, 0.005, 0.05);
             var chain = FFT(LocalBuf(256), sig);
             var centroid = SpecCentroid.kr(chain);
-            SendReply.kr(Impulse.kr(30), '/scvis/ndef', [targetID, amp, centroid]);
+            SendReply.kr(Impulse.kr({{FPS}}), '/scvis/ndef', [targetID, amp, centroid]);
         }).add;
 
         SynthDef(\scvis_parent_router, { |inBus = 0, outBus = 0, amp = 1.0|

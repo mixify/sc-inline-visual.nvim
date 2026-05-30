@@ -1,4 +1,6 @@
 -- sc-inline-visual.nvim plugin entry point
+if vim.g.loaded_sc_inline_visual then return end
+vim.g.loaded_sc_inline_visual = 1
 
 vim.api.nvim_create_user_command("SCInlineVisualStart", function()
   require("sc_inline_visual").start()
@@ -30,13 +32,16 @@ vim.api.nvim_create_user_command("SCInlineVisualTest", function()
   require("sc_inline_visual.osc").send_test()
 end, {})
 
--- Auto-start on .scd files, waiting for scnvim to be ready
+-- Auto-start on .scd files, waiting for scnvim to be ready.
+-- Honors require("sc_inline_visual.config").auto_start at the moment the
+-- FileType event fires, so users can disable it in their setup() call.
 do
   local auto_start_timer = nil
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "supercollider",
-    once = true, -- only set up once
+    once = true,
     callback = function()
+      if not require("sc_inline_visual.config").auto_start then return end
       local sciv = require("sc_inline_visual")
       local attempts = 0
       auto_start_timer = vim.uv.new_timer()

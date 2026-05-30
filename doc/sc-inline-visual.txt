@@ -1,0 +1,189 @@
+*sc-inline-visual.txt*  Live SuperCollider visualizations as Neovim virtual text
+
+Author:  mixify <https://github.com/mixify>
+License: MIT
+
+==============================================================================
+CONTENTS                                          *sc-inline-visual-contents*
+
+  1. Intro ................................. |sc-inline-visual-intro|
+  2. Requirements .......................... |sc-inline-visual-requirements|
+  3. Install ............................... |sc-inline-visual-install|
+  4. Setup ................................. |sc-inline-visual-setup|
+  5. Commands .............................. |sc-inline-visual-commands|
+  6. Markers ............................... |sc-inline-visual-markers|
+  7. Health ................................ |sc-inline-visual-health|
+  8. How it works .......................... |sc-inline-visual-internals|
+  9. Limitations ........................... |sc-inline-visual-limitations|
+
+==============================================================================
+1. INTRO                                              *sc-inline-visual-intro*
+
+sc-inline-visual.nvim renders live amp / frequency / envelope visualizations
+as virtual text next to the SuperCollider code that produced them. It bridges
+the SC server's analysis UGens to Neovim's extmark API via a small OSC
+listener.
+
+Status: experimental.
+
+==============================================================================
+2. REQUIREMENTS                                *sc-inline-visual-requirements*
+
+- Neovim ≥ 0.10 (uses |vim.uv|)
+- scnvim <https://github.com/davidgranstrom/scnvim> in the same session
+- SuperCollider (`sclang`, `scsynth`) on `$PATH`
+
+==============================================================================
+3. INSTALL                                           *sc-inline-visual-install*
+
+Using lazy.nvim:
+>
+    {
+      "mixify/sc-inline-visual.nvim",
+      ft = "supercollider",
+      dependencies = { "davidgranstrom/scnvim" },
+      opts = {
+        -- see |sc-inline-visual-setup| for the available keys
+      },
+    }
+<
+
+==============================================================================
+4. SETUP                                              *sc-inline-visual-setup*
+
+                                                  *sc-inline-visual.setup()*
+setup({opts})
+
+The plugin works out of the box; |setup()| only overrides defaults.
+
+Defaults: >
+
+    require("sc_inline_visual").setup({
+      port       = 57121,  -- UDP port for OSC packets between Neovim and SC
+      render_fps = 30,     -- Lua render loop AND SC analysis SendReply rate
+      auto_start = true,   -- start on first `supercollider` filetype
+      notify     = true,   -- vim.notify start / stop announcements
+    })
+<
+                                                  *sc-inline-visual-port*
+`port`
+    UDP port used in both directions. The SC monitor script binds
+    `NetAddr("127.0.0.1", port)` for outbound, and Neovim's OSC receiver binds
+    `0.0.0.0:port` for inbound. They must match.
+
+                                                  *sc-inline-visual-fps*
+`render_fps`
+    Drives both Neovim's redraw timer interval (`1000 / fps` ms) and the
+    `Impulse.kr(fps)` rate inside the per-block FFT/amp monitor synths. Higher
+    values are smoother but consume more scsynth CPU.
+
+                                                  *sc-inline-visual-auto_start*
+`auto_start`
+    When `false`, the plugin does not start on the first `supercollider`
+    buffer. Use |:SCInlineVisualStart| to start manually.
+
+                                                  *sc-inline-visual-notify*
+`notify`
+    Gate for the "SCInlineVisual: started / stopped" notifications. Warning
+    and error messages are unaffected.
+
+==============================================================================
+5. COMMANDS                                        *sc-inline-visual-commands*
+
+                                                  *:SCInlineVisualStart*
+:SCInlineVisualStart
+    Install the SC-side monitor (via scnvim's sclang) and start the render
+    loop.
+
+                                                  *:SCInlineVisualStop*
+:SCInlineVisualStop
+    Tear down the monitor and clear all extmarks.
+
+                                                  *:SCInlineVisualToggle*
+:SCInlineVisualToggle
+    Start if stopped, stop if running.
+
+                                                  *:SCInlineVisualRescan*
+:SCInlineVisualRescan
+    Re-parse the current buffer for blocks. Normally automatic via
+    |TextChanged|.
+
+                                                  *:SCInlineVisualList*
+:SCInlineVisualList
+    List detected blocks with their target name and line range.
+
+                                                  *:SCInlineVisualDebug*
+:SCInlineVisualDebug
+    Toggle verbose OSC packet logging (every inbound packet → |vim.notify|).
+
+                                                  *:SCInlineVisualTest*
+:SCInlineVisualTest
+    Send a synthetic OSC packet to the local listener — smoke test of the
+    UDP path without going through sclang.
+
+==============================================================================
+6. MARKERS                                          *sc-inline-visual-markers*
+
+Tag any region for tracking under a stable name by placing a marker comment
+on the line above the block: >
+
+    // @vis lead
+    (
+    SynthDef(\lead, { |freq = 440|
+        Out.ar(0, SinOsc.ar(freq) * 0.2 ! 2)
+    }).add;
+    )
+<
+The marker is parsed before automatic block detection, so it always wins.
+Without a marker, anonymous `( ... )` blocks get auto-assigned names like
+`block1`, `block2`, ...
+
+==============================================================================
+7. HEALTH                                            *sc-inline-visual-health*
+
+>
+    :checkhealth sc_inline_visual
+<
+Verifies:
+  - Neovim version is ≥ 0.10
+  - `sclang` is on `$PATH`
+  - scnvim is installed (and reports whether the process is up)
+  - The configured |sc-inline-visual-port| is free
+
+==============================================================================
+8. HOW IT WORKS                                  *sc-inline-visual-internals*
+
+On start, a SuperCollider script (`sc/monitor.scd`) is sent to sclang. It
+installs:
+
+  - One master amp + centroid monitor on bus 0.
+  - `~scvisPlayWrap` — wraps `{ body }.play` so every invocation of the same
+    source block writes into a shared per-block audio bus. A router synth
+    forwards that bus to out 0, and a per-block monitor synth runs FFT and
+    Amplitude analysis on it. The wrap is necessary because `Ndef` is keyed
+    by symbol — the previous Ndef-based wrap silently dropped all but the
+    most recent caller when a wrapped function was invoked concurrently.
+  - `~scvisTrackNdef` — attaches the same monitor synth to an `Ndef` the user
+    wrote themselves.
+
+Both monitor types emit `SendReply` packets at |sc-inline-visual-fps| Hz over
+OSC. The Lua side parses them in |sc_inline_visual.osc| and routes each into
+|sc_inline_visual.state| keyed by the source block name. A timer at the same
+rate drives `renderer.render` to refresh extmarks.
+
+`CmdPeriod` is handled — buses are freed and the master monitor reinstalled
+automatically. `~scvisNdefMap` (parent → tid) is preserved across `CmdPeriod`
+so a block keeps its OSC routing identity.
+
+==============================================================================
+9. LIMITATIONS                                  *sc-inline-visual-limitations*
+
+- Per-block buses and monitor synths persist until `CmdPeriod` or
+  |:SCInlineVisualStop|. A long session that evaluates many distinct block
+  names accumulates them; idle-timeout GC is on the roadmap.
+- The envelope renderer only reads `Env.new([...], [...])` literals statically
+  from the buffer source — runtime envelopes built by expressions don't show.
+- Tested on macOS with `scsynth` + JACK. Other setups should work but are
+  unverified.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

@@ -1,10 +1,11 @@
 -- Minimal OSC UDP receiver using vim.uv
 -- Parses OSC messages: /sc/analysis, /sc/event, /sc/param
 
+local config = require("sc_inline_visual.config")
+
 local M = {}
 
 local udp = nil
-local PORT = 57121
 M.debug = false
 
 -- Parse a null-terminated OSC string starting at pos.
@@ -81,7 +82,7 @@ function M.start(callback)
   if udp then M.stop() end
 
   udp = vim.uv.new_udp()
-  local ok, err = udp:bind("0.0.0.0", PORT)
+  local ok, err = udp:bind("0.0.0.0", config.port)
   if not ok then
     vim.schedule(function()
       vim.notify("OSC bind failed: " .. tostring(err), vim.log.levels.ERROR)
@@ -169,7 +170,7 @@ function M.send_test()
   end
 
   local msg = osc_str("/sc/analysis") .. osc_str(",sff") .. osc_str("_master") .. float32(0.65) .. float32(2000)
-  test_udp:send(msg, "127.0.0.1", PORT, function()
+  test_udp:send(msg, "127.0.0.1", config.port, function()
     test_udp:close()
   end)
 end

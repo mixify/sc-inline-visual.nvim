@@ -1,3 +1,4 @@
+local config = require("sc_inline_visual.config")
 local osc = require("sc_inline_visual.osc")
 local parser = require("sc_inline_visual.parser")
 local state = require("sc_inline_visual.state")
@@ -13,6 +14,17 @@ local on_send_replaced = false
 local _this_file = debug.getinfo(1, "S").source:match("@(.*)")
 local _plugin_root = vim.fn.fnamemodify(_this_file, ":h:h:h") .. "/"
 
+--- Merge user opts into the module-wide config table in place. Other modules
+--- (osc.lua, health.lua) read from the same table so changes take effect
+--- without re-requiring.
+function M.setup(opts)
+  if type(opts) == "table" then
+    for k, v in pairs(opts) do
+      config[k] = v
+    end
+  end
+end
+
 local function send_to_sclang(code)
   local ok, sclang = pcall(require, "scnvim.sclang")
   if ok and sclang.is_running() then
@@ -23,7 +35,16 @@ local function send_to_sclang(code)
 end
 
 local function load_sc(name)
-  return table.concat(vim.fn.readfile(_plugin_root .. "sc/" .. name), "\n")
+  local text = table.concat(vim.fn.readfile(_plugin_root .. "sc/" .. name), "\n")
+  text = text:gsub("{{PORT}}", tostring(config.port))
+  text = text:gsub("{{FPS}}", tostring(config.render_fps))
+  return text
+end
+
+local function notify(msg, level)
+  if config.notify then
+    vim.notify(msg, level or vim.log.levels.INFO)
+  end
 end
 
 function M.start()
@@ -91,9 +112,9 @@ function M.start()
     end
   end
 
-  -- Render loop at ~30 FPS (33ms) — renders all tracked buffers
+  local interval_ms = math.max(1, math.floor(1000 / config.render_fps))
   timer = vim.uv.new_timer()
-  timer:start(0, 33, vim.schedule_wrap(function()
+  timer:start(0, interval_ms, vim.schedule_wrap(function()
     local all = state.get_all()
     for buf, _ in pairs(tracked_bufs) do
       if vim.api.nvim_buf_is_valid(buf) then
@@ -105,7 +126,7 @@ function M.start()
   end))
 
   running = true
-  vim.notify("SCInlineVisual: started", vim.log.levels.INFO)
+  notify("SCInlineVisual: started")
 end
 
 --- Add a buffer for tracking. Scans for blocks and sets up auto-rescan.
@@ -160,7 +181,7 @@ function M.stop()
   M._remove_monitor()
 
   running = false
-  vim.notify("SCInlineVisual: stopped", vim.log.levels.INFO)
+  notify("SCInlineVisual: stopped")
 end
 
 function M.toggle()

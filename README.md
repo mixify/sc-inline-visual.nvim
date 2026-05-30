@@ -23,11 +23,19 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
   "mixify/sc-inline-visual.nvim",
   ft = "supercollider",
   dependencies = { "davidgranstrom/scnvim" },
+  opts = {
+    -- defaults, all optional
+    port       = 57121,  -- UDP port shared between Neovim and SC
+    render_fps = 30,     -- redraw + SC analysis SendReply rate
+    auto_start = true,   -- start on first .scd buffer
+    notify     = true,   -- vim.notify on start / stop
+  },
 }
 ```
 
 The plugin loads on `.scd` filetype and auto-starts after scnvim's sclang
-process is up (polls for ~60s, then gives up silently).
+process is up (polls for ~60s, then gives up silently). Set `auto_start = false`
+to drive it manually with `:SCInlineVisualStart`.
 
 ## Usage
 
@@ -64,6 +72,9 @@ Try the bundled examples:
 | `:SCInlineVisualList`      | List detected blocks with line ranges.                 |
 | `:SCInlineVisualDebug`     | Toggle verbose OSC packet logging.                     |
 | `:SCInlineVisualTest`      | Send a synthetic OSC packet (smoke test).              |
+
+Also: `:checkhealth sc_inline_visual` verifies Neovim version, `sclang` on
+`$PATH`, scnvim availability, and that the configured port is free.
 
 ## How it works
 
