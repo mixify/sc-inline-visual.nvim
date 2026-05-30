@@ -54,9 +54,14 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
 
 1. Parse the buffer for evaluatable blocks (`( ... )`, explicit `Ndef`/`Pdef`,
    single-line `{ ... }.play`, or any block tagged with `// @vis <name>`).
-2. Rewrite any anonymous `{ body }.play` to route through a per-block audio
-   bus, so multiple concurrent invocations from the same source location no
-   longer overwrite each other.
+2. Rewrite any `<expr>.play` chain so audio is routed through a per-block bus:
+   - `{ body }.play` becomes `~scvisWrap.value("block_n", { body }).play`
+     (Function dispatch: wraps the body in `Out.ar(bus, ...)`).
+   - `Pbind(...).play` and `Pdef(\name, Pbind(...)).play` get the same
+     treatment via the Pattern dispatch path
+     (`Pbindf(<pattern>, \out, bus)`), so each Pbind streams to its own bus
+     and visualizes independently instead of all blending into the master
+     readout.
 3. Attach an FFT/amplitude monitor synth per block on the SC server.
 4. Render virtual-text widgets above each block at ~30 FPS:
    - **amp braille meter** (left-to-right intensity)
@@ -91,11 +96,17 @@ Also: `:checkhealth sc_inline_visual` verifies Neovim version, `sclang` on
 A small SuperCollider script (`sc/monitor.scd`) installs:
 
 - One persistent amp+centroid monitor synth on the master bus.
-- A `~scvisPlayWrap` helper that, on first call per source block, allocates a
-  shared audio bus, a passthrough router (`bus → out 0`), and a per-block
-  FFT/amp monitor. Subsequent `.play` invocations from that block reuse the
-  same bus.
-- An `~scvisTrackNdef` helper for blocks the user wrote as explicit `Ndef`s.
+- `~scvisEnsureBus` — allocates (and caches) the per-block bus / router /
+  monitor trio. The router pipes the bus to `out 0` so the user still hears
+  it; the monitor runs FFT + Amplitude analysis and reports at `render_fps`.
+- `~scvisWrap` — polymorphic decorator. Dispatches on the runtime type of
+  the wrapped expression:
+  - `Function` → returns `{ Out.ar(bus, SynthDef.wrap(body)) }` (transient
+    synth per call, freed by `doneAction` in user UGens).
+  - `Pattern`  → returns `Pbindf(pattern, \out, bus)` (each scheduled Event
+    writes to the block's bus instead of out 0).
+- `~scvisTrackNdef` — alternate path for explicit `Ndef`s, which have their
+  own bus on the NodeProxy side; the helper just attaches a monitor synth.
 
 Both monitors emit `SendReply` packets at 30 Hz over OSC (`127.0.0.1:57121`)
 that the Neovim side parses and stores per target. A render timer reads that

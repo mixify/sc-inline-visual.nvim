@@ -73,14 +73,13 @@
     };
 };
 
-// Each call shares the per-block bus, so concurrent .play invocations from the
-// same source location no longer overwrite each other (the previous Ndef-singleton
-// wrap silently dropped all but the most recent caller).
-~scvisPlayWrap = { |parentName, body|
+// Allocate (or look up) the per-block bus, router, and monitor synth set, and
+// return the bus index. Pure plumbing — no audio side effects on the user's
+// graph. Called by ~scvisWrap and anything else that wants the per-block bus.
+~scvisEnsureBus = { |parentName|
     var sym = parentName.asSymbol;
-    var bus = ~scvisParentBuses.at(sym);
-    if(bus.isNil) {
-        bus = Bus.audio(s, 2);
+    if(~scvisParentBuses.at(sym).isNil) {
+        var bus = Bus.audio(s, 2);
         ~scvisParentBuses.put(sym, bus);
         fork {
             var tid, router, monitor;
@@ -100,8 +99,24 @@
             ("SCInlineVisual: parent " ++ parentName ++ " bus:" ++ bus.index ++ " id:" ++ tid).postln;
         };
     };
-    { Out.ar(~scvisParentBuses.at(sym).index, SynthDef.wrap(body)) }
+    ~scvisParentBuses.at(sym).index
 };
+
+// Polymorphic decorator. Routes `target` so its audio writes go through the
+// per-block bus instead of out 0 — what gets returned depends on the type:
+//   Function: a new function `{ Out.ar(bus, body.value) }` ready for `.play`
+//   Pattern:  a Pbindf-wrapped pattern with \out overridden, ready for `.play`
+// Adding support for a new playable type is a single case clause.
+~scvisWrap = { |parentName, target|
+    var bus = ~scvisEnsureBus.value(parentName);
+    case
+        { target.isKindOf(Function) } { { Out.ar(bus, SynthDef.wrap(target)) } }
+        { target.isKindOf(Pattern)  } { Pbindf(target, \out, bus) }
+        { target };
+};
+
+// Back-compat alias for the prior wrap name — same surface signature.
+~scvisPlayWrap = ~scvisWrap;
 
 OSCdef(\scvisReply).free;
 OSCdef(\scvisReply, { |msg|

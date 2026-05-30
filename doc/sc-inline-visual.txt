@@ -168,14 +168,17 @@ On start, a SuperCollider script (`sc/monitor.scd`) is sent to sclang. It
 installs:
 
   - One master amp + centroid monitor on bus 0.
-  - `~scvisPlayWrap` — wraps `{ body }.play` so every invocation of the same
-    source block writes into a shared per-block audio bus. A router synth
-    forwards that bus to out 0, and a per-block monitor synth runs FFT and
-    Amplitude analysis on it. The wrap is necessary because `Ndef` is keyed
-    by symbol — the previous Ndef-based wrap silently dropped all but the
-    most recent caller when a wrapped function was invoked concurrently.
+  - `~scvisEnsureBus` — allocates (cached) the per-block bus, router
+    (`bus -> out 0`), and FFT/amp monitor.
+  - `~scvisWrap` — polymorphic decorator that routes audio through the
+    per-block bus:
+    - For `Function` targets: returns `{ Out.ar(bus, SynthDef.wrap(body)) }`.
+    - For `Pattern` targets:  returns `Pbindf(pattern, \\out, bus)`, so each
+      scheduled Event writes to the block's bus instead of out 0.
+    Adding support for new playable types is a single `case` clause on the
+    SC side.
   - `~scvisTrackNdef` — attaches the same monitor synth to an `Ndef` the user
-    wrote themselves.
+    wrote themselves (Ndefs already own a bus on the NodeProxy side).
 
 Both monitor types emit `SendReply` packets at |sc-inline-visual-fps| Hz over
 OSC. The Lua side parses them in |sc_inline_visual.osc| and routes each into

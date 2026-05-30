@@ -93,7 +93,7 @@ function M.start()
           local line = cursor[1] - 1
           local target, kind = state.activate_by_line(line)
 
-          if target and kind == "anonymous" then
+          if target and (kind == "anonymous" or kind == "pdef") then
             local wrapped, did_wrap = M._wrap_in_ndef(code, target)
             if did_wrap then
               code = wrapped
@@ -217,43 +217,63 @@ function M.toggle()
   end
 end
 
---- Wrap `{ body }.play` in `~scvisPlayWrap.value("target", { body }).play`
---- so every invocation of the user's `.play` writes into the same per-block bus
---- (SC side allocates bus + router + monitor lazily per parent target).
+--- Rewrite the first `<expr>.play` chain in `code` to route through the
+--- per-block bus: `~scvisWrap.value("<target>", <expr>).play`. `<expr>` may
+--- be a function block (`{ ... }`) or a class call (`Pbind(...)`,
+--- `Pdef(\name, ...)`, ...). The SC-side `~scvisWrap` dispatches on the
+--- runtime type, so Lua doesn't need to distinguish.
 ---
---- Returns `(transformed_code, true)` if wrapped, `(code, false)` otherwise.
---- Skips when the code already contains an explicit Ndef/Pdef.
+--- Returns `(transformed_code, true)` on success, `(code, false)` otherwise.
+--- Skips when an explicit `Ndef(` is present — those go through the dedicated
+--- `~scvisTrackNdef` path that attaches a monitor to the Ndef's own bus.
 function M._wrap_in_ndef(code, target)
-  if code:match("Ndef%s*%(") or code:match("Pdef%s*%(") then
+  if code:match("Ndef%s*%(") then return code, false end
+
+  -- Locate the first `}.play` or `).play` occurrence.
+  local brace_close = select(1, code:find("}%s*%.play"))
+  local paren_close = select(1, code:find("%)%s*%.play"))
+  local close_pos, open_ch, close_ch, has_class_prefix
+  if brace_close and (not paren_close or brace_close < paren_close) then
+    close_pos, open_ch, close_ch = brace_close, "{", "}"
+  elseif paren_close then
+    close_pos, open_ch, close_ch, has_class_prefix = paren_close, "(", ")", true
+  else
     return code, false
   end
 
-  local play_pattern = "}%s*%.play"
-  local close_start, _ = code:find(play_pattern)
-  if not close_start then return code, false end
-
+  -- Walk backward to the matching opener.
   local depth = 1
-  local open_brace = nil
-  for i = close_start - 1, 1, -1 do
+  local open_pos = nil
+  for i = close_pos - 1, 1, -1 do
     local ch = code:sub(i, i)
-    if ch == "}" then
+    if ch == close_ch then
       depth = depth + 1
-    elseif ch == "{" then
+    elseif ch == open_ch then
       depth = depth - 1
       if depth == 0 then
-        open_brace = i
+        open_pos = i
         break
       end
     end
   end
-  if not open_brace then return code, false end
+  if not open_pos then return code, false end
 
-  local prefix = code:sub(1, open_brace - 1)
-  local func_body = code:sub(open_brace, close_start) -- { ... }
-  local suffix = code:sub(close_start + 1)             -- .play...
+  -- For `).play` the receiver also includes the class identifier before the `(`.
+  local receiver_start = open_pos
+  if has_class_prefix then
+    local i = open_pos - 1
+    while i >= 1 and code:sub(i, i):match("%s") do i = i - 1 end
+    local ident_end = i
+    while i >= 1 and code:sub(i, i):match("[%w_]") do i = i - 1 end
+    if i < ident_end then receiver_start = i + 1 end
+  end
+
+  local prefix = code:sub(1, receiver_start - 1)
+  local receiver = code:sub(receiver_start, close_pos)
+  local suffix = code:sub(close_pos + 1)
 
   return prefix
-    .. "~scvisPlayWrap.value(\"" .. target .. "\", " .. func_body .. ")"
+    .. "~scvisWrap.value(\"" .. target .. "\", " .. receiver .. ")"
     .. suffix,
     true
 end

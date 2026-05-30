@@ -1072,8 +1072,9 @@ header "Test 5: _wrap_in_ndef (~scvisPlayWrap) and named target routing"
 
 cat > "$TEST_DIR/_tmp_wrap_test.lua" << 'LUAEOF'
 -- Tests the per-block .play wrapping and routing. Wrap now emits
---   ~scvisPlayWrap.value("<target>", { ... }).play
--- and state routing keys directly off the parent target name (no aliases).
+--   ~scvisWrap.value("<target>", <expr>).play
+-- where <expr> can be a function block OR a class call (Pbind, Pdef, ...).
+-- State routing keys directly off the parent target name (no aliases).
 
 vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
 package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
@@ -1089,8 +1090,8 @@ local errors = {}
 -- ── 5a: basic { ... }.play wrapping ──
 local code_a = "{ SinOsc.ar(440) * 0.1 }.play"
 local wrapped_a, did_a = M._wrap_in_ndef(code_a, "block1")
-if not wrapped_a:match('^~scvisPlayWrap%.value%("block1", ') then
-  errors[#errors+1] = "5a: wrapped should start with ~scvisPlayWrap.value(\"block1\", , got: " .. wrapped_a
+if not wrapped_a:match('^~scvisWrap%.value%("block1", ') then
+  errors[#errors+1] = "5a: wrapped should start with ~scvisWrap.value(\"block1\", , got: " .. wrapped_a
 end
 if not wrapped_a:match("%).play$") then
   errors[#errors+1] = "5a: wrapped should end with ).play, got: " .. wrapped_a
@@ -1112,7 +1113,7 @@ end
 -- ── 5c: nested braces ──
 local code_c = "{ { SinOsc.ar(440) }.value * EnvGen.kr(Env.perc) }.play"
 local wrapped_c, did_c = M._wrap_in_ndef(code_c, "nested")
-if not wrapped_c:match('^~scvisPlayWrap%.value%("nested", ') then
+if not wrapped_c:match('^~scvisWrap%.value%("nested", ') then
   errors[#errors+1] = "5c: nested wrapping failed, got: " .. wrapped_c
 end
 if did_c ~= true then
@@ -1145,11 +1146,45 @@ end
 
 -- ── 5f: target embedded literally as string arg ──
 local wrapped_f, did_f = M._wrap_in_ndef("{ DC.ar(0) }.play", "myTarget")
-if not wrapped_f:match('~scvisPlayWrap%.value%("myTarget", ') then
+if not wrapped_f:match('~scvisWrap%.value%("myTarget", ') then
   errors[#errors+1] = "5f: target arg wrong, got: " .. wrapped_f
 end
 if did_f ~= true then
   errors[#errors+1] = "5f: did_wrap=" .. tostring(did_f) .. ", expected true"
+end
+
+-- ── 5h: Pbind(...).play wraps via ).play branch ──
+local code_h = 'Pbind(\\freq, 440, \\dur, 0.2).play'
+local wrapped_h, did_h = M._wrap_in_ndef(code_h, "pat1")
+if not wrapped_h:match('^~scvisWrap%.value%("pat1", Pbind%(') then
+  errors[#errors+1] = "5h: Pbind wrap failed, got: " .. wrapped_h
+end
+if not wrapped_h:match('%)%.play$') then
+  errors[#errors+1] = "5h: wrapped should end with ).play, got: " .. wrapped_h
+end
+if did_h ~= true then
+  errors[#errors+1] = "5h: did_wrap=" .. tostring(did_h) .. ", expected true"
+end
+
+-- ── 5i: Pdef(\name, Pbind(...)).play wraps the outer Pdef ──
+local code_i = 'Pdef(\\foo, Pbind(\\freq, 440)).play'
+local wrapped_i, did_i = M._wrap_in_ndef(code_i, "pat2")
+if not wrapped_i:match('^~scvisWrap%.value%("pat2", Pdef%(') then
+  errors[#errors+1] = "5i: Pdef wrap failed, got: " .. wrapped_i
+end
+-- The full Pdef expression (incl. nested Pbind) must be inside the wrap arg.
+if not wrapped_i:match('Pbind%(\\\\?freq, 440%)%)%)%.play$') then
+  errors[#errors+1] = "5i: inner Pbind lost or wrap closed early, got: " .. wrapped_i
+end
+if did_i ~= true then
+  errors[#errors+1] = "5i: did_wrap=" .. tostring(did_i) .. ", expected true"
+end
+
+-- ── 5j: Ndef in the code still bypasses wrap (uses ~scvisTrackNdef path) ──
+local code_j = 'Ndef(\\bass, { SinOsc.ar(110) * 0.1 }).play'
+local wrapped_j, did_j = M._wrap_in_ndef(code_j, "block5")
+if wrapped_j ~= code_j or did_j ~= false then
+  errors[#errors+1] = "5j: Ndef should not be wrapped, got: " .. wrapped_j
 end
 
 -- ── 5g: wrapped blocks get per-block data, non-wrapped get _master ──
@@ -1203,12 +1238,15 @@ WRAP_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
   -c "qa!" 2>&1 | grep "WRAP_RESULT:" | head -1 || true)
 
 if [[ "$WRAP_RESULT" == *":PASS"* ]]; then
-  report "wrap: basic {}.play wrapped to ~scvisPlayWrap" "PASS"
+  report "wrap: basic {}.play wrapped to ~scvisWrap" "PASS"
   report "wrap: preserves .play(args)" "PASS"
   report "wrap: handles nested braces" "PASS"
   report "wrap: skips already-Ndef code" "PASS"
   report "wrap: skips code without .play" "PASS"
   report "wrap: target string embedded correctly" "PASS"
+  report "wrap: Pbind(...).play wraps via ).play branch" "PASS"
+  report "wrap: Pdef(\\name, Pbind()).play wraps the outer Pdef" "PASS"
+  report "wrap: Ndef code still bypasses wrap" "PASS"
   report "State: wrapped blocks get per-block data, non-wrapped get _master" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
