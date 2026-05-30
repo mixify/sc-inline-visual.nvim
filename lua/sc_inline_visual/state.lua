@@ -28,7 +28,7 @@ local function new_state(block)
     last_update = 0,
     active = false,
     eval_time = 0,
-    has_ndef = false, -- true once wrapped in Ndef and tracked
+    monitored = false, -- has its own per-block monitor stream; skip _master broadcast
   }
 end
 
@@ -52,13 +52,13 @@ function M.reset()
   targets = {}
 end
 
---- Mark a target as wrapped (either via ~scvisPlayWrap or as an explicit Ndef).
+--- Mark a target as monitored — either via ~scvisPlayWrap or as an explicit Ndef.
 --- Once marked, the block stops receiving _master data and is updated only
 --- through its own per-block monitor stream.
 function M.mark_wrapped(target)
   local s = targets[target]
   if s then
-    s.has_ndef = true
+    s.monitored = true
   end
 end
 
@@ -129,7 +129,7 @@ function M.update(msg_type, target, ...)
   -- "_master" goes to active blocks that don't have their own per-block monitor.
   if target == "_master" then
     for _, s in pairs(targets) do
-      if s.active and not s.has_ndef then
+      if s.active and not s.monitored then
         apply_update(s, msg_type, ...)
       end
     end
@@ -147,25 +147,27 @@ end
 function M.get_all()
   local t = now()
   for _, s in pairs(targets) do
-    -- Prune old events
-    local pruned = {}
-    for _, ev in ipairs(s.events) do
-      if t - ev.time < EVENT_TTL then
-        pruned[#pruned + 1] = ev
+    if #s.events > 0 and (t - s.events[1].time) >= EVENT_TTL then
+      local pruned = {}
+      for _, ev in ipairs(s.events) do
+        if t - ev.time < EVENT_TTL then
+          pruned[#pruned + 1] = ev
+        end
       end
+      s.events = pruned
     end
-    s.events = pruned
 
-    -- Decay amplitude when no updates arrive
     if s.active and s.last_update > 0 and (t - s.last_update) > ACTIVE_TTL then
-      s.amp = s.amp * DECAY_RATE
-      if s.amp < 0.005 then
-        s.amp = 0
-      end
-      local h = s.amp_history
-      h[#h + 1] = s.amp
-      if #h > HISTORY_LEN then
-        table.remove(h, 1)
+      if s.amp > 0 then
+        s.amp = s.amp * DECAY_RATE
+        if s.amp < 0.005 then
+          s.amp = 0
+        end
+        local h = s.amp_history
+        h[#h + 1] = s.amp
+        if #h > HISTORY_LEN then
+          table.remove(h, 1)
+        end
       end
     end
   end

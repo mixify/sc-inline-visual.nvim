@@ -679,8 +679,8 @@ if math.abs(all["bass"].amp - 0.9) > 0.001 then
   errors[#errors+1] = "3c2: bass.amp=" .. all["bass"].amp .. ", expected 0.9"
 end
 
--- 3c3: After new _master update, all active blocks without has_ndef get updated.
--- bass has no mark_wrapped/has_ndef, so it also receives _master.
+-- 3c3: After new _master update, all active blocks without `monitored` get updated.
+-- bass was never marked monitored, so it also receives _master.
 state.update("analysis", "_master", 0.7, 3000.0)
 all = state.get_all()
 if math.abs(all["synth1"].amp - 0.7) > 0.001 then
@@ -689,7 +689,7 @@ end
 if math.abs(all["synth2"].amp - 0.7) > 0.001 then
   errors[#errors+1] = "3c3: synth2.amp=" .. all["synth2"].amp .. ", expected 0.7"
 end
--- bass also gets _master since has_ndef is false (mark_wrapped was not called)
+-- bass also gets _master since monitored is false (mark_wrapped was not called)
 if math.abs(all["bass"].amp - 0.7) > 0.001 then
   errors[#errors+1] = "3c3: bass.amp=" .. all["bass"].amp .. ", expected 0.7 (_master reaches it)"
 end
