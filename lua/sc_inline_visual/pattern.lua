@@ -3,7 +3,7 @@
 
 local M = {}
 
-local DEGREE_TO_NOTE = { [0]="C", "D", "E", "F", "G", "A", "B" }
+local DEGREE_TO_NOTE = { [0] = "C", "D", "E", "F", "G", "A", "B" }
 
 --- Parse a SC array literal: [1, 2, 3] or [0.25, 0.5]
 --- Returns a list of numbers, or nil if not parseable.
@@ -53,9 +53,7 @@ end
 --- Returns: { {key="dur", values={0.25,0.25,0.5}, type="Pseq"}, ... } or nil
 function M.parse_pbind(source)
   -- Check if this is a Pbind/Pbindef
-  if not source:match("Pbind") and not source:match("Pbindef") then
-    return nil
-  end
+  if not source:match("Pbind") and not source:match("Pbindef") then return nil end
 
   local params = {}
 
@@ -93,7 +91,10 @@ function M.degree_to_note(deg)
   -- Handle negative degrees and octave wrapping
   local oct_offset = math.floor(deg / 7)
   local d = deg % 7
-  if d < 0 then d = d + 7; oct_offset = oct_offset - 1 end
+  if d < 0 then
+    d = d + 7
+    oct_offset = oct_offset - 1
+  end
   local name = DEGREE_TO_NOTE[d] or "?"
   if oct_offset ~= 0 then
     name = name .. (oct_offset > 0 and ("+" .. oct_offset) or tostring(oct_offset))

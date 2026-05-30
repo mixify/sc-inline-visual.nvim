@@ -6,24 +6,32 @@ local M = {}
 local BLOCK_CHARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 
 -- Braille: 2x4 dot matrix per character (U+2800..U+28FF)
-local LEFT_DOTS  = { 0x40, 0x04, 0x02, 0x01 }
+local LEFT_DOTS = { 0x40, 0x04, 0x02, 0x01 }
 local RIGHT_DOTS = { 0x80, 0x20, 0x10, 0x08 }
 
 local function braille_pair(v1, v2)
   local l = math.floor(math.max(0, math.min(1, v1)) * 4 + 0.5)
   local r = math.floor(math.max(0, math.min(1, v2)) * 4 + 0.5)
   local code = 0x2800
-  for i = 1, math.min(l, 4) do code = code + LEFT_DOTS[i] end
-  for i = 1, math.min(r, 4) do code = code + RIGHT_DOTS[i] end
+  for i = 1, math.min(l, 4) do
+    code = code + LEFT_DOTS[i]
+  end
+  for i = 1, math.min(r, 4) do
+    code = code + RIGHT_DOTS[i]
+  end
   return vim.fn.nr2char(code)
 end
 
 --- Pick highlight group based on amplitude level.
 local function amp_hl(v)
-  if v >= 0.8 then return "SCInlineVisualAmpHot"
-  elseif v >= 0.5 then return "SCInlineVisualAmpHigh"
-  elseif v >= 0.2 then return "SCInlineVisualAmpMid"
-  else return "SCInlineVisualAmpLow"
+  if v >= 0.8 then
+    return "SCInlineVisualAmpHot"
+  elseif v >= 0.5 then
+    return "SCInlineVisualAmpHigh"
+  elseif v >= 0.2 then
+    return "SCInlineVisualAmpMid"
+  else
+    return "SCInlineVisualAmpLow"
   end
 end
 
@@ -34,8 +42,12 @@ local function braille_sparkline_colored(values, width)
   local n = #values
   local start = math.max(1, n - (width * 2) + 1)
   local vals = {}
-  for i = start, n do vals[#vals + 1] = values[i] end
-  while #vals < width * 2 do table.insert(vals, 1, 0) end
+  for i = start, n do
+    vals[#vals + 1] = values[i]
+  end
+  while #vals < width * 2 do
+    table.insert(vals, 1, 0)
+  end
 
   -- Group consecutive pairs by color
   local segments = {}
@@ -108,16 +120,16 @@ local function freq_bar(centroid, centroid_history, width)
   local center_slot = math.floor(center * (width - 1)) + 1
 
   local slots = {}
-  for i = 1, width do slots[i] = "░" end
+  for i = 1, width do
+    slots[i] = "░"
+  end
 
   -- Draw spread region + bright center
   local half = math.floor(spread / 2)
   for i = math.max(1, center_slot - half), math.min(width, center_slot + half) do
     slots[i] = "▒"
   end
-  if center_slot >= 1 and center_slot <= width then
-    slots[center_slot] = "▓"
-  end
+  if center_slot >= 1 and center_slot <= width then slots[center_slot] = "▓" end
 
   return table.concat(slots)
 end
@@ -182,8 +194,8 @@ function M.env_preview(env)
     return pts[#pts].v / max_v
   end
 
-  local WIDTH = 22                  -- chars per row
-  local ROWS = 3                    -- braille rows → 12 vertical levels
+  local WIDTH = 22 -- chars per row
+  local ROWS = 3 -- braille rows → 12 vertical levels
   local SLOTS = WIDTH * 2
   local V_MAX = ROWS * 4
 
@@ -206,8 +218,12 @@ function M.env_preview(env)
       local left = math.max(0, math.min(4, math.floor(levels[i] * V_MAX + 0.5) - offset))
       local right = math.max(0, math.min(4, math.floor(levels[i + 1] * V_MAX + 0.5) - offset))
       local code = 0x2800
-      for j = 1, left do code = code + LEFT_DOTS[j] end
-      for j = 1, right do code = code + RIGHT_DOTS[j] end
+      for j = 1, left do
+        code = code + LEFT_DOTS[j]
+      end
+      for j = 1, right do
+        code = code + RIGHT_DOTS[j]
+      end
       chars[#chars + 1] = vim.fn.nr2char(code)
     end
     return table.concat(chars)
@@ -220,7 +236,9 @@ function M.env_preview(env)
     pixels = {}
     for y = 0, V_MAX - 1 do
       pixels[y] = {}
-      for x = 1, SLOTS do pixels[y][x] = false end
+      for x = 1, SLOTS do
+        pixels[y][x] = false
+      end
     end
     local function plot(x, y)
       if y < 0 or y >= V_MAX or x < 1 or x > SLOTS then return end
@@ -232,7 +250,9 @@ function M.env_preview(env)
       local y = math.floor((1 - levels[x]) * (V_MAX - 1) + 0.5)
       if prev_y and math.abs(prev_y - y) > 1 then
         local lo, hi = math.min(prev_y, y), math.max(prev_y, y)
-        for yy = lo, hi do plot(x, yy) end
+        for yy = lo, hi do
+          plot(x, yy)
+        end
       else
         plot(x, y)
       end
@@ -246,9 +266,9 @@ function M.env_preview(env)
     for c = 1, WIDTH do
       local lx, rx = (c - 1) * 2 + 1, (c - 1) * 2 + 2
       local code = 0x2800
-      for dot = 0, 3 do                 -- 0=top dot of this row
+      for dot = 0, 3 do -- 0=top dot of this row
         local y = r * 4 + dot
-        local idx = 4 - dot             -- LEFT_DOTS index (1=bottom, 4=top)
+        local idx = 4 - dot -- LEFT_DOTS index (1=bottom, 4=top)
         if pixels[y][lx] then code = code + LEFT_DOTS[idx] end
         if pixels[y][rx] then code = code + RIGHT_DOTS[idx] end
       end
@@ -302,7 +322,8 @@ function M.pattern_preview(params)
   local rows = {}
 
   -- Separator
-  rows[#rows + 1] = { { "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌", "SCInlineVisualDim" } }
+  rows[#rows + 1] =
+    { { "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌", "SCInlineVisualDim" } }
 
   for _, p in ipairs(params) do
     local label = string.format("%-5s", p.key:sub(1, 4))
@@ -311,7 +332,9 @@ function M.pattern_preview(params)
       if p.key == "dur" then
         -- Rhythm: proportional width blocks
         local total = 0
-        for _, v in ipairs(p.values) do total = total + v end
+        for _, v in ipairs(p.values) do
+          total = total + v
+        end
         local WIDTH = 20
         local chars = {}
         for _, v in ipairs(p.values) do
@@ -328,7 +351,6 @@ function M.pattern_preview(params)
           { "  " .. label, "SCInlineVisualDim" },
           { table.concat(chars), "SCInlineVisualAmpMid" },
         }
-
       elseif p.key == "degree" then
         -- Note names from scale degrees
         local notes = {}
@@ -339,7 +361,6 @@ function M.pattern_preview(params)
           { "  " .. label, "SCInlineVisualDim" },
           { table.concat(notes, " "), "SCInlineVisualHeader" },
         }
-
       elseif p.key == "midinote" or p.key == "note" then
         -- MIDI note names
         local notes = {}
@@ -350,7 +371,6 @@ function M.pattern_preview(params)
           { "  " .. label, "SCInlineVisualDim" },
           { table.concat(notes, " "), "SCInlineVisualHeader" },
         }
-
       elseif p.key == "amp" then
         -- Volume per step as block chars
         local chars = {}
@@ -362,7 +382,6 @@ function M.pattern_preview(params)
           { "  " .. label, "SCInlineVisualDim" },
           { table.concat(chars, " "), amp_hl(p.values[1] or 0) },
         }
-
       elseif p.key == "freq" then
         -- Frequencies as note names
         local notes = {}
@@ -373,7 +392,6 @@ function M.pattern_preview(params)
           { "  " .. label, "SCInlineVisualDim" },
           { table.concat(notes, " "), "SCInlineVisualCentroid" },
         }
-
       else
         -- Generic: show values
         local strs = {}
@@ -389,7 +407,6 @@ function M.pattern_preview(params)
           { table.concat(strs, " "), "SCInlineVisual" },
         }
       end
-
     elseif p.range then
       -- Pwhite range
       rows[#rows + 1] = {
@@ -412,18 +429,24 @@ function M.param_bar(label, value)
   end
 
   local ratio
-  if value <= 0 then ratio = 0
-  elseif value <= 1 then ratio = value
-  else ratio = math.max(0, math.min(1, math.log(value) / math.log(20000)))
+  if value <= 0 then
+    ratio = 0
+  elseif value <= 1 then
+    ratio = value
+  else
+    ratio = math.max(0, math.min(1, math.log(value) / math.log(20000)))
   end
 
   local filled = math.floor(ratio * 8 + 0.5)
   local empty = 8 - filled
 
   local val_str
-  if value >= 100 then val_str = string.format("%.0f", value)
-  elseif value >= 1 then val_str = string.format("%.1f", value)
-  else val_str = string.format("%.2f", value)
+  if value >= 100 then
+    val_str = string.format("%.0f", value)
+  elseif value >= 1 then
+    val_str = string.format("%.1f", value)
+  else
+    val_str = string.format("%.2f", value)
   end
 
   return {
@@ -441,7 +464,9 @@ function M.event_timeline(events)
   local window = 3.0
 
   local slots = {}
-  for i = 1, WIDTH do slots[i] = " " end
+  for i = 1, WIDTH do
+    slots[i] = " "
+  end
 
   local glyphs = { kick = "●", snare = "◆", hat = "·", note = "•" }
   for _, ev in ipairs(events) do

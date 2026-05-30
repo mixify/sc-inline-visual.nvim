@@ -57,9 +57,7 @@ end
 --- through its own per-block monitor stream.
 function M.mark_wrapped(target)
   local s = targets[target]
-  if s then
-    s.monitored = true
-  end
+  if s then s.monitored = true end
 end
 
 --- Reverse of mark_wrapped — called when the SC-side parent has been GC'd,
@@ -124,14 +122,10 @@ local function apply_update(s, msg_type, ...)
     local name, amp = ...
     local events = s.events
     events[#events + 1] = { name = name or "event", amp = amp or 1, time = now() }
-    if #events > EVENT_HISTORY_LEN then
-      table.remove(events, 1)
-    end
+    if #events > EVENT_HISTORY_LEN then table.remove(events, 1) end
   elseif msg_type == "param" then
     local name, value = ...
-    if name then
-      s.params[name] = value
-    end
+    if name then s.params[name] = value end
   end
 end
 
@@ -139,9 +133,7 @@ function M.update(msg_type, target, ...)
   -- "_master" goes to active blocks that don't have their own per-block monitor.
   if target == "_master" then
     for _, s in pairs(targets) do
-      if s.active and not s.monitored then
-        apply_update(s, msg_type, ...)
-      end
+      if s.active and not s.monitored then apply_update(s, msg_type, ...) end
     end
     return
   end
@@ -160,9 +152,7 @@ function M.get_all()
     if #s.events > 0 and (t - s.events[1].time) >= EVENT_TTL then
       local pruned = {}
       for _, ev in ipairs(s.events) do
-        if t - ev.time < EVENT_TTL then
-          pruned[#pruned + 1] = ev
-        end
+        if t - ev.time < EVENT_TTL then pruned[#pruned + 1] = ev end
       end
       s.events = pruned
     end
@@ -170,14 +160,10 @@ function M.get_all()
     if s.active and s.last_update > 0 and (t - s.last_update) > ACTIVE_TTL then
       if s.amp > 0 then
         s.amp = s.amp * DECAY_RATE
-        if s.amp < 0.005 then
-          s.amp = 0
-        end
+        if s.amp < 0.005 then s.amp = 0 end
         local h = s.amp_history
         h[#h + 1] = s.amp
-        if #h > HISTORY_LEN then
-          table.remove(h, 1)
-        end
+        if #h > HISTORY_LEN then table.remove(h, 1) end
       end
     end
   end

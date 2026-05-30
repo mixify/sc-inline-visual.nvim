@@ -46,13 +46,10 @@ function M.check()
 
   local config = require("sc_inline_visual.config")
   if port_in_use(config.port) then
-    vim.health.warn(
-      ("Port %d is already bound"):format(config.port),
-      {
-        "If the plugin is currently running this is expected.",
-        "Otherwise change `port` in setup() to a free port.",
-      }
-    )
+    vim.health.warn(("Port %d is already bound"):format(config.port), {
+      "If the plugin is currently running this is expected.",
+      "Otherwise change `port` in setup() to a free port.",
+    })
   else
     vim.health.ok(("Port %d is free"):format(config.port))
   end

@@ -92,8 +92,11 @@ function M.render(bufnr, all_states)
       active_targets[s.target] = true
       local prev = last[s.target]
       local params_n = 0
-      for _ in pairs(s.params) do params_n = params_n + 1 end
-      if not prev
+      for _ in pairs(s.params) do
+        params_n = params_n + 1
+      end
+      if
+        not prev
         or prev.tick ~= tick
         or prev.events_n ~= #s.events
         or prev.params_n ~= params_n
@@ -129,11 +132,7 @@ function M.render(bufnr, all_states)
     -- Cache Pbind / Env parses by (tick, start_line, end_line) — the parses
     -- only depend on buffer source, not on live audio state.
     local pc = pc_buf[s.target]
-    if not pc
-      or pc.tick ~= tick
-      or pc.start_line ~= s.start_line
-      or pc.end_line ~= s.end_line
-    then
+    if not pc or pc.tick ~= tick or pc.start_line ~= s.start_line or pc.end_line ~= s.end_line then
       local block_source_lines = {}
       for i = s.start_line + 1, math.min(s.end_line + 1, #lines) do
         block_source_lines[#block_source_lines + 1] = lines[i] or ""
@@ -172,9 +171,7 @@ function M.render(bufnr, all_states)
     for _, name in ipairs(param_names) do
       vis_rows[#vis_rows + 1] = widgets.param_bar(name, s.params[name])
     end
-    if #s.events > 0 then
-      vis_rows[#vis_rows + 1] = widgets.event_timeline(s.events)
-    end
+    if #s.events > 0 then vis_rows[#vis_rows + 1] = widgets.event_timeline(s.events) end
 
     -- Place rows on buffer lines, overflow as virt_lines
     local block_len = s.end_line - s.start_line + 1
@@ -199,7 +196,9 @@ function M.render(bufnr, all_states)
 
     do
       local params_n = 0
-      for _ in pairs(s.params) do params_n = params_n + 1 end
+      for _ in pairs(s.params) do
+        params_n = params_n + 1
+      end
       new_last[s.target] = {
         amp = s.amp,
         centroid = s.centroid,

@@ -49,9 +49,7 @@ local function parse_osc(data)
   if not addr then return nil end
 
   local typetag, next_pos = read_osc_string(data, pos)
-  if not typetag or typetag:sub(1, 1) ~= "," then
-    return addr, {}
-  end
+  if not typetag or typetag:sub(1, 1) ~= "," then return addr, {} end
 
   local args = {}
   pos = next_pos
@@ -92,14 +90,20 @@ function M.start(callback)
 
   udp:recv_start(function(err, data, addr, flags)
     if err then
-      if M.debug then vim.schedule(function() vim.notify("OSC err: " .. tostring(err)) end) end
+      if M.debug then
+        vim.schedule(function()
+          vim.notify("OSC err: " .. tostring(err))
+        end)
+      end
       return
     end
     if not data then return end
 
     if M.debug then
       local hex = {}
-      for i = 1, math.min(#data, 80) do hex[#hex+1] = string.format("%02x", data:byte(i)) end
+      for i = 1, math.min(#data, 80) do
+        hex[#hex + 1] = string.format("%02x", data:byte(i))
+      end
       vim.schedule(function()
         vim.notify("OSC raw (" .. #data .. "b): " .. table.concat(hex, " "))
       end)
@@ -109,8 +113,10 @@ function M.start(callback)
     if not osc_addr then return end
 
     if M.debug then
-      local parts = {osc_addr}
-      for _, a in ipairs(args) do parts[#parts+1] = tostring(a) end
+      local parts = { osc_addr }
+      for _, a in ipairs(args) do
+        parts[#parts + 1] = tostring(a)
+      end
       vim.schedule(function()
         vim.notify("OSC parsed: " .. table.concat(parts, " | "))
       end)
@@ -138,9 +144,7 @@ end
 function M.stop()
   if udp then
     udp:recv_stop()
-    if not udp:is_closing() then
-      udp:close()
-    end
+    if not udp:is_closing() then udp:close() end
     udp = nil
   end
 end
@@ -158,7 +162,10 @@ function M.send_test()
     -- Pack float as big-endian IEEE 754
     if f == 0 then return "\0\0\0\0" end
     local sign = 0
-    if f < 0 then sign = 1; f = -f end
+    if f < 0 then
+      sign = 1
+      f = -f
+    end
     local m, e = math.frexp(f)
     e = e + 126
     m = (m * 2 - 1) * 8388608
@@ -169,7 +176,11 @@ function M.send_test()
     return string.char(b1, b2, b3, b4)
   end
 
-  local msg = osc_str("/sc/analysis") .. osc_str(",sff") .. osc_str("_master") .. float32(0.65) .. float32(2000)
+  local msg = osc_str("/sc/analysis")
+    .. osc_str(",sff")
+    .. osc_str("_master")
+    .. float32(0.65)
+    .. float32(2000)
   test_udp:send(msg, "127.0.0.1", config.port, function()
     test_udp:close()
   end)

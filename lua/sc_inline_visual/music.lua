@@ -32,8 +32,7 @@ end
 function M.fmt_freq(hz)
   if hz <= 0 then return "—" end
   local note = M.freq_to_note(hz)
-  local rendered = hz >= 1000 and string.format("%.1fk", hz / 1000)
-    or string.format("%.0f", hz)
+  local rendered = hz >= 1000 and string.format("%.1fk", hz / 1000) or string.format("%.0f", hz)
   return note .. " " .. rendered
 end
 

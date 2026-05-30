@@ -69,9 +69,7 @@ end
 -- True if any child identifier of `node` is "play" (i.e. a `.play` chain).
 local function has_play_call(node, bufnr)
   for child in node:iter_children() do
-    if child:type() == "identifier"
-      and vim.treesitter.get_node_text(child, bufnr) == "play"
-    then
+    if child:type() == "identifier" and vim.treesitter.get_node_text(child, bufnr) == "play" then
       return true
     end
   end

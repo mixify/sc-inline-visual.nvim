@@ -43,9 +43,7 @@ local function load_sc(name)
 end
 
 local function notify(msg, level)
-  if config.notify then
-    vim.notify(msg, level or vim.log.levels.INFO)
-  end
+  if config.notify then vim.notify(msg, level or vim.log.levels.INFO) end
 end
 
 function M.start()
@@ -76,17 +74,13 @@ function M.start()
       local ok_sclang, sclang = pcall(require, "scnvim.sclang")
       if ok_sclang then
         editor.on_send:replace(function(lines, callback)
-          if callback then
-            lines = callback(lines)
-          end
+          if callback then lines = callback(lines) end
 
           local code = table.concat(lines, "\n")
           local cur_buf = vim.api.nvim_get_current_buf()
 
           -- Auto-add new .scd buffers
-          if not tracked_bufs[cur_buf] then
-            M._add_buffer(cur_buf)
-          end
+          if not tracked_bufs[cur_buf] then M._add_buffer(cur_buf) end
 
           -- Find which block the cursor is in
           local cursor = vim.api.nvim_win_get_cursor(0)
@@ -115,33 +109,42 @@ function M.start()
 
   local interval_ms = math.max(1, math.floor(1000 / config.render_fps))
   timer = vim.uv.new_timer()
-  timer:start(0, interval_ms, vim.schedule_wrap(function()
-    local all = state.get_all()
-    for buf, _ in pairs(tracked_bufs) do
-      if vim.api.nvim_buf_is_valid(buf) then
-        renderer.render(buf, all)
-      else
-        tracked_bufs[buf] = nil
+  timer:start(
+    0,
+    interval_ms,
+    vim.schedule_wrap(function()
+      local all = state.get_all()
+      for buf, _ in pairs(tracked_bufs) do
+        if vim.api.nvim_buf_is_valid(buf) then
+          renderer.render(buf, all)
+        else
+          tracked_bufs[buf] = nil
+        end
       end
-    end
-  end))
+    end)
+  )
 
   if config.idle_gc_seconds > 0 then
     local check_ms = math.max(1, config.idle_gc_check_seconds) * 1000
     gc_timer = vim.uv.new_timer()
-    gc_timer:start(check_ms, check_ms, vim.schedule_wrap(function()
-      local now_s = vim.uv.hrtime() / 1e9
-      for target, s in pairs(state.get_all()) do
-        if s.monitored
-          and s.last_update > 0
-          and (now_s - s.last_update) > config.idle_gc_seconds
-          and s.amp <= 0.005
-        then
-          send_to_sclang(string.format('~scvisFreeParent.value("%s")', target))
-          state.unmark_wrapped(target)
+    gc_timer:start(
+      check_ms,
+      check_ms,
+      vim.schedule_wrap(function()
+        local now_s = vim.uv.hrtime() / 1e9
+        for target, s in pairs(state.get_all()) do
+          if
+            s.monitored
+            and s.last_update > 0
+            and (now_s - s.last_update) > config.idle_gc_seconds
+            and s.amp <= 0.005
+          then
+            send_to_sclang(string.format('~scvisFreeParent.value("%s")', target))
+            state.unmark_wrapped(target)
+          end
         end
-      end
-    end))
+      end)
+    )
   end
 
   running = true
@@ -185,9 +188,7 @@ function M.stop()
 
   -- Remove autocmds and clear extmarks for all tracked buffers
   for buf, info in pairs(tracked_bufs) do
-    if info.autocmd_id then
-      pcall(vim.api.nvim_del_autocmd, info.autocmd_id)
-    end
+    if info.autocmd_id then pcall(vim.api.nvim_del_autocmd, info.autocmd_id) end
     renderer.clear(buf)
   end
   tracked_bufs = {}
@@ -195,9 +196,7 @@ function M.stop()
   -- Restore scnvim's original on_send
   if on_send_replaced then
     local ok_editor, editor = pcall(require, "scnvim.editor")
-    if ok_editor and editor.on_send and editor.on_send.restore then
-      editor.on_send:restore()
-    end
+    if ok_editor and editor.on_send and editor.on_send.restore then editor.on_send:restore() end
     on_send_replaced = false
   end
 
@@ -262,9 +261,13 @@ function M._wrap_in_ndef(code, target)
   local receiver_start = open_pos
   if has_class_prefix then
     local i = open_pos - 1
-    while i >= 1 and code:sub(i, i):match("%s") do i = i - 1 end
+    while i >= 1 and code:sub(i, i):match("%s") do
+      i = i - 1
+    end
     local ident_end = i
-    while i >= 1 and code:sub(i, i):match("[%w_]") do i = i - 1 end
+    while i >= 1 and code:sub(i, i):match("[%w_]") do
+      i = i - 1
+    end
     if i < ident_end then receiver_start = i + 1 end
   end
 
@@ -272,10 +275,7 @@ function M._wrap_in_ndef(code, target)
   local receiver = code:sub(receiver_start, close_pos)
   local suffix = code:sub(close_pos + 1)
 
-  return prefix
-    .. "~scvisWrap.value(\"" .. target .. "\", " .. receiver .. ")"
-    .. suffix,
-    true
+  return prefix .. '~scvisWrap.value("' .. target .. '", ' .. receiver .. ")" .. suffix, true
 end
 
 function M._install_monitor()
