@@ -5,6 +5,7 @@ local M = {}
 local targets = {} -- target_name -> state table
 local HISTORY_LEN = 24
 local EVENT_HISTORY_LEN = 20
+local PAT_HISTORY_LEN = 8 -- sliding window of recent Pbind events for the widget
 local EVENT_TTL = 3.0 -- seconds
 local ACTIVE_TTL = 0.5 -- seconds without data before decay starts
 local DECAY_RATE = 0.85
@@ -29,7 +30,7 @@ local function new_state(block)
     active = false,
     eval_time = 0,
     monitored = false, -- has its own per-block monitor stream; skip _master broadcast
-    current_step = -1, -- bumped on each Pbind event; nil means "no current step"
+    pat_history = {}, -- sliding window of recent Pbind events; widget reads its right-end
     last_step_time = 0,
   }
 end
@@ -72,13 +73,23 @@ function M.unmark_wrapped(target)
   end
 end
 
---- Advance the current-step counter for a block, fired by /scvis/pat_step
---- (one OSC ping per scheduled Pbind event). The widget renders the entry
---- at index (current_step % #values) as the playing step.
-function M.bump_step(target)
+--- Record a Pbind event that SC just scheduled, fired by /scvis/pat_event with
+--- the resolved key values. Pushes onto the sliding `pat_history` window so the
+--- widget can render the last N actually-played notes. Sentinel values from SC
+--- (e.g. -1 for missing keys) are stored as-is; the widget renders only the
+--- keys the user wrote in their Pbind.
+function M.record_event(target, midinote, degree, freq, dur, amp)
   local s = targets[target]
   if not s then return end
-  s.current_step = s.current_step + 1
+  local h = s.pat_history
+  h[#h + 1] = {
+    midinote = midinote,
+    degree = degree,
+    freq = freq,
+    dur = dur,
+    amp = amp,
+  }
+  if #h > PAT_HISTORY_LEN then table.remove(h, 1) end
   s.last_step_time = now()
   s.active = true
 end

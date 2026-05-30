@@ -105,23 +105,30 @@
 // Polymorphic decorator. Routes `target` so its audio writes go through the
 // per-block bus instead of out 0 — what gets returned depends on the type:
 //   Function: a new function `{ Out.ar(bus, body.value) }` ready for `.play`
-//   Pattern:  a Pbindf-wrapped pattern with `\out` overridden, also Pchain'd
-//             with a Pfunc that sends `/scvis/pat_step` once per event so the
-//             widget can light up the currently-playing step
+//   Pattern:  a Pbindf-wrapped pattern with `\out` overridden, plus a
+//             `\callback` that fires once per scheduled event with the event's
+//             resolved key values — this is what the widget shows as the live
+//             history (`midi`, `freq`, `degree`, `dur`, `amp`).
 //   Event:    the same Event with `\out` keyed to the bus, ready for `.play`
 //             (covers the common `(instrument: \name, ...).play` idiom)
-// Note: Pattern and Event clauses silently override any user-supplied `\out`.
+// Note: Pattern and Event clauses silently override any user-supplied `\out`,
+//       and the Pattern clause also overrides any user-supplied `\callback`.
 // Adding support for a new playable type is a single case clause.
 ~scvisWrap = { |parentName, target|
     var bus = ~scvisEnsureBus.value(parentName);
-    var stepPing = Pfunc({
-        ~scvisAddr.sendMsg("/scvis/pat_step", parentName.asString);
-        0
-    });
+    var eventHook = { |ev|
+        ~scvisAddr.sendMsg("/scvis/pat_event",
+            parentName.asString,
+            ev[\midinote] ? -1.0,
+            ev[\degree]   ? -999.0,
+            ev[\freq]     ? -1.0,
+            ev[\dur]      ? 0.0,
+            ev[\amp]      ? -1.0);
+    };
     case
         { target.isKindOf(Function) } { { Out.ar(bus, SynthDef.wrap(target)) } }
         { target.isKindOf(Pattern)  } {
-            Pchain(Pbindf(target, \out, bus), Pbind(\scvisStep, stepPing))
+            Pchain(Pbindf(target, \out, bus), Pbind(\callback, eventHook))
         }
         { target.isKindOf(Event)    } { target.put(\out, bus); target }
         { target };

@@ -751,32 +751,46 @@ if not all["synth1"].active then
   errors[#errors+1] = "3j: synth1 should be active"
 end
 
--- 3k: bump_step advances current_step counter
+-- 3k: record_event pushes onto pat_history and activates the block
 state.init(blocks)
-if all["synth1"].current_step ~= -1 then
-  errors[#errors+1] = "3k: initial current_step=" .. tostring(all["synth1"].current_step) .. ", expected -1"
+if #all["synth1"].pat_history ~= 0 then
+  errors[#errors+1] = "3k: initial pat_history len=" .. #all["synth1"].pat_history .. ", expected 0"
 end
-state.bump_step("synth1")
-state.bump_step("synth1")
-state.bump_step("synth1")
+state.record_event("synth1", 60, -999, -1, 0.2, 0.5)
+state.record_event("synth1", 62, -999, -1, 0.2, 0.5)
+state.record_event("synth1", 67, -999, -1, 0.3, 0.6)
 all = state.get_all()
-if all["synth1"].current_step ~= 2 then
-  errors[#errors+1] = "3k: after 3 bumps current_step=" .. tostring(all["synth1"].current_step) .. ", expected 2"
+if #all["synth1"].pat_history ~= 3 then
+  errors[#errors+1] = "3k: after 3 records pat_history len=" .. #all["synth1"].pat_history .. ", expected 3"
+end
+if all["synth1"].pat_history[3].midinote ~= 67 then
+  errors[#errors+1] = "3k: last event midinote=" .. tostring(all["synth1"].pat_history[3].midinote) .. ", expected 67"
 end
 if not all["synth1"].active then
-  errors[#errors+1] = "3k: bump_step should activate the block"
+  errors[#errors+1] = "3k: record_event should activate the block"
 end
 
--- 3l: bump_step on unknown target is a no-op
-state.bump_step("nonexistent")  -- should not error
+-- 3l: pat_history caps at PAT_HISTORY_LEN (=8); older entries fall off the left
+for i = 1, 10 do state.record_event("synth1", 60 + i, -999, -1, 0.1, 0.5) end
+all = state.get_all()
+if #all["synth1"].pat_history ~= 8 then
+  errors[#errors+1] = "3l: pat_history should cap at 8, got " .. #all["synth1"].pat_history
+end
+-- Earliest surviving event should be the one with midinote 63 (3 + 10 records - 8 kept = entry 6 of 13)
+if all["synth1"].pat_history[1].midinote ~= 63 then
+  errors[#errors+1] = "3l: oldest surviving event midinote=" .. tostring(all["synth1"].pat_history[1].midinote) .. ", expected 63"
+end
 
--- 3m: reset clears everything
+-- 3m: record_event on unknown target is a no-op
+state.record_event("nonexistent", 60, -999, -1, 0.2, 0.5)  -- should not error
+
+-- 3n: reset clears everything
 state.reset()
 all = state.get_all()
 local count = 0
 for _ in pairs(all) do count = count + 1 end
 if count ~= 0 then
-  errors[#errors+1] = "3m: after reset, state count=" .. count .. ", expected 0"
+  errors[#errors+1] = "3n: after reset, state count=" .. count .. ", expected 0"
 end
 
 if #errors == 0 then
@@ -802,7 +816,8 @@ if [[ "$STATE_RESULT" == *":PASS"* ]]; then
   report "State: param update" "PASS"
   report "State: deactivate_all" "PASS"
   report "State: activate_by_line" "PASS"
-  report "State: bump_step advances current_step + activates" "PASS"
+  report "State: record_event pushes onto pat_history + activates" "PASS"
+  report "State: pat_history caps at PAT_HISTORY_LEN" "PASS"
   report "State: reset clears state" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
@@ -1297,13 +1312,14 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────
-# TEST 6: pattern widget beat grid
+# TEST 6: pattern widget — live history rendering
 # ─────────────────────────────────────────────────────────────
-header "Test 6: pattern widget beat grid + playhead"
+header "Test 6: pattern widget — live event history rendering"
 
 cat > "$TEST_DIR/_tmp_grid_test.lua" << 'LUAEOF'
--- Verify that the snap-only beat grid row renders with `│··` cells and that
--- the playhead (▲) lands on the column matching `current_step % n_cells`.
+-- Verify that pattern_preview renders one row per user key, pulling cells
+-- from the live pat_history (most recent in the rightmost slot), with dim
+-- placeholders padding the left when fewer than WINDOW events have arrived.
 vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
 package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
 package.loaded["scnvim.sclang"] = { is_running = function() return false end }
@@ -1312,7 +1328,6 @@ package.loaded["scnvim.editor"] = {}
 local widgets_pat = require("sc_inline_visual.widgets.pattern")
 local errors = {}
 
--- Concatenate the text content of a segment list into a flat string.
 local function flatten(segs)
   local parts = {}
   for _, seg in ipairs(segs) do
@@ -1321,62 +1336,77 @@ local function flatten(segs)
   return table.concat(parts)
 end
 
--- ── 6a: grid with no playhead (current_step nil) is all │ ──
-local segs_a = widgets_pat._beat_grid(nil, 4, 3)
-local text_a = flatten(segs_a)
-if text_a ~= "  beat │··│··│··│··" then
-  errors[#errors+1] = "6a: idle grid mismatch, got: '" .. text_a .. "'"
+-- ── 6a: empty history -> all-placeholder row, no real notes ──
+local params = { { key = "midinote" } }
+local rows_a = widgets_pat.pattern_preview(params, {})
+-- Expect: separator + midi row = 2 rows
+if #rows_a ~= 2 then
+  errors[#errors+1] = "6a: expected 2 rows (sep + midi), got: " .. #rows_a
+end
+local text_a = flatten(rows_a[2])
+if text_a:match("C") or text_a:match("D") or text_a:match("E") then
+  errors[#errors+1] = "6a: empty history row should not contain note names, got: '" .. text_a .. "'"
+end
+local dot_count = 0
+for _ in text_a:gmatch("·") do
+  dot_count = dot_count + 1
+end
+if dot_count < 8 then
+  errors[#errors+1] = "6a: expected at least 8 placeholder dots, got " .. dot_count
 end
 
--- ── 6b: playhead at step 0 -> first `│` becomes `▲` ──
-local segs_b = widgets_pat._beat_grid(0, 4, 3)
-local text_b = flatten(segs_b)
-if text_b ~= "  beat ▲··│··│··│··" then
-  errors[#errors+1] = "6b: step 0 grid mismatch, got: '" .. text_b .. "'"
-end
-
--- ── 6c: playhead at step 2 -> third `│` becomes `▲` ──
-local segs_c = widgets_pat._beat_grid(2, 4, 3)
-local text_c = flatten(segs_c)
-if text_c ~= "  beat │··│··▲··│··" then
-  errors[#errors+1] = "6c: step 2 grid mismatch, got: '" .. text_c .. "'"
-end
-
--- ── 6d: playhead modulos around n_cells (step 6 of 4-cell grid) ──
-local segs_d = widgets_pat._beat_grid(6, 4, 3)
-local text_d = flatten(segs_d)
-if text_d ~= "  beat │··│··▲··│··" then
-  errors[#errors+1] = "6d: step 6 (=2 mod 4) mismatch, got: '" .. text_d .. "'"
-end
-
--- ── 6e: pattern_preview appends a grid row after the value rows ──
-local params = {
-  { key = "midinote", values = { 60, 62, 67 } },
+-- ── 6b: history with 3 events -> note names in rightmost 3 slots ──
+local hist_b = {
+  { midinote = 60 }, -- C4
+  { midinote = 62 }, -- D4
+  { midinote = 67 }, -- G4
 }
-local rows = widgets_pat.pattern_preview(params, 1)
--- Expect: separator row, midinote row, grid row = 3 rows
-if #rows ~= 3 then
-  errors[#errors+1] = "6e: expected 3 rows (sep+midi+grid), got: " .. #rows
+local rows_b = widgets_pat.pattern_preview(params, hist_b)
+local text_b = flatten(rows_b[2])
+if not (text_b:match("C4") and text_b:match("D4") and text_b:match("G4")) then
+  errors[#errors+1] = "6b: history events not rendered as notes, got: '" .. text_b .. "'"
 end
-local grid_text = flatten(rows[#rows])
-if not grid_text:match("^  beat ") then
-  errors[#errors+1] = "6e: last row should be the beat grid, got: '" .. grid_text .. "'"
-end
-if not grid_text:match("▲") then
-  errors[#errors+1] = "6e: grid should contain a ▲ playhead, got: '" .. grid_text .. "'"
+-- Last event (G4) should land after C4 and D4 (rightmost == most recent).
+local pos_c, pos_d, pos_g = text_b:find("C4"), text_b:find("D4"), text_b:find("G4")
+if not (pos_c and pos_d and pos_g and pos_c < pos_d and pos_d < pos_g) then
+  errors[#errors+1] = "6b: events should appear in time order, got positions C4="
+    .. tostring(pos_c) .. " D4=" .. tostring(pos_d) .. " G4=" .. tostring(pos_g)
 end
 
--- ── 6f: pattern_preview without current_step renders grid with no ▲ ──
-local rows_f = widgets_pat.pattern_preview(params, nil)
-local grid_f = flatten(rows_f[#rows_f])
-if grid_f:match("▲") then
-  errors[#errors+1] = "6f: idle pattern should not have a playhead, got: '" .. grid_f .. "'"
+-- ── 6c: SC sentinel values fall back to placeholder, not garbage ──
+-- midinote = -1 means SC's Pbind didn't resolve a \midinote for this event.
+local hist_c = {
+  { midinote = -1 },
+  { midinote = 60 },
+}
+local rows_c = widgets_pat.pattern_preview(params, hist_c)
+local text_c = flatten(rows_c[2])
+-- The -1 should not render as a note (e.g. as "C-2" or similar negative MIDI).
+if text_c:match("C%-") or text_c:match("%-1") or text_c:match("%-2") then
+  errors[#errors+1] = "6c: sentinel -1 leaked into render: '" .. text_c .. "'"
+end
+
+-- ── 6d: multiple keys -> one row per key plus the separator ──
+local params_d = {
+  { key = "midinote" },
+  { key = "amp" },
+  { key = "dur" },
+}
+local rows_d = widgets_pat.pattern_preview(params_d, hist_b)
+if #rows_d ~= 4 then
+  errors[#errors+1] = "6d: expected 4 rows (sep + 3 keys), got: " .. #rows_d
+end
+
+-- ── 6e: no params -> empty list (no separator, no rows) ──
+local rows_e = widgets_pat.pattern_preview({}, hist_b)
+if #rows_e ~= 0 then
+  errors[#errors+1] = "6e: empty params should return no rows, got: " .. #rows_e
 end
 
 if #errors == 0 then
   print("GRID_RESULT:PASS")
 else
-  for _, e in ipairs(errors) do io.stderr:write("  grid error: " .. e .. "\n") end
+  for _, e in ipairs(errors) do io.stderr:write("  pat error: " .. e .. "\n") end
   print("GRID_RESULT:FAIL")
 end
 LUAEOF
@@ -1386,17 +1416,16 @@ GRID_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
   -c "qa!" 2>&1 | grep "GRID_RESULT:" | head -1 || true)
 
 if [[ "$GRID_RESULT" == *":PASS"* ]]; then
-  report "grid: idle row is all │" "PASS"
-  report "grid: ▲ at step 0 column" "PASS"
-  report "grid: ▲ at step 2 column" "PASS"
-  report "grid: ▲ wraps modulo n_cells" "PASS"
-  report "grid: pattern_preview appends grid row" "PASS"
-  report "grid: idle pattern has no ▲" "PASS"
+  report "pat: idle history renders placeholder dots" "PASS"
+  report "pat: history events render in time order (newest at right)" "PASS"
+  report "pat: SC sentinel value falls back to placeholder" "PASS"
+  report "pat: one row per key + separator" "PASS"
+  report "pat: empty params returns no rows" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
     -c "luafile $TEST_DIR/_tmp_grid_test.lua" \
     -c "qa!" 2>&1 | head -30 >&2
-  report "Test 6: pattern widget beat grid" "FAIL"
+  report "Test 6: pattern widget live history" "FAIL"
 fi
 
 # ─────────────────────────────────────────────────────────────
