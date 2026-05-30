@@ -101,7 +101,11 @@ function M.start()
   -- Listen for OSC
   osc.start(function(msg_type, target, ...)
     if target == "_cmdperiod" then return end
-    state.update(msg_type, target, ...)
+    if msg_type == "pat_step" then
+      state.bump_step(target)
+    else
+      state.update(msg_type, target, ...)
+    end
   end)
 
   -- Send monitor synth to sclang

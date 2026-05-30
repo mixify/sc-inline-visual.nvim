@@ -9,7 +9,7 @@ local M = {}
 
 local ns_id = nil
 local buf_cache = {} -- bufnr -> { lines, tick }
-local last_rendered = {} -- bufnr -> { target -> { amp, centroid, events_n, params_n, tick } }
+local last_rendered = {} -- bufnr -> { target -> { amp, centroid, events_n, params_n, current_step, tick } }
 local parsed_cache = {} -- bufnr -> { target -> { tick, start_line, end_line, pat_params, env_info } }
 
 -- Sensitivity thresholds; anything smaller is treated as a no-op for redraw.
@@ -100,6 +100,7 @@ function M.render(bufnr, all_states)
         or prev.tick ~= tick
         or prev.events_n ~= #s.events
         or prev.params_n ~= params_n
+        or prev.current_step ~= s.current_step
         or math.abs(prev.amp - s.amp) > AMP_EPSILON
         or math.abs(prev.centroid - s.centroid) > CENTROID_EPSILON
       then
@@ -149,7 +150,7 @@ function M.render(bufnr, all_states)
     end
 
     if pc.pat_params then
-      for _, row in ipairs(widgets.pattern_preview(pc.pat_params)) do
+      for _, row in ipairs(widgets.pattern_preview(pc.pat_params, s.current_step)) do
         vis_rows[#vis_rows + 1] = row
       end
     end
@@ -204,6 +205,7 @@ function M.render(bufnr, all_states)
         centroid = s.centroid,
         events_n = #s.events,
         params_n = params_n,
+        current_step = s.current_step,
         tick = tick,
       }
     end

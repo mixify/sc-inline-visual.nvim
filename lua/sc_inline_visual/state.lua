@@ -29,6 +29,8 @@ local function new_state(block)
     active = false,
     eval_time = 0,
     monitored = false, -- has its own per-block monitor stream; skip _master broadcast
+    current_step = -1, -- bumped on each Pbind event; nil means "no current step"
+    last_step_time = 0,
   }
 end
 
@@ -68,6 +70,17 @@ function M.unmark_wrapped(target)
     s.monitored = false
     s.last_update = 0
   end
+end
+
+--- Advance the current-step counter for a block, fired by /scvis/pat_step
+--- (one OSC ping per scheduled Pbind event). The widget renders the entry
+--- at index (current_step % #values) as the playing step.
+function M.bump_step(target)
+  local s = targets[target]
+  if not s then return end
+  s.current_step = s.current_step + 1
+  s.last_step_time = now()
+  s.active = true
 end
 
 --- Mark a block as active (user evaluated it).

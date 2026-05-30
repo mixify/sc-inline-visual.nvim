@@ -68,7 +68,9 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
    - **frequency position bar** with the dominant note name (e.g. `A4`, `G#5`)
    - **envelope line-plot** for any `EnvGen.kr(Env.new(...))` it can statically
      read out of the block source
-   - **pattern preview** for `Pbind`/`Pbindef` blocks
+   - **pattern preview** for `Pbind`/`Pbindef` blocks, with the currently
+     playing step highlighted in real time (each scheduled event sends a
+     `/scvis/pat_step` ping back to Neovim)
 
 Try the bundled examples:
 
@@ -103,8 +105,10 @@ A small SuperCollider script (`sc/monitor.scd`) installs:
   the wrapped expression:
   - `Function` → returns `{ Out.ar(bus, SynthDef.wrap(body)) }` (transient
     synth per call, freed by `doneAction` in user UGens).
-  - `Pattern`  → returns `Pbindf(pattern, \out, bus)` (each scheduled Event
-    writes to the block's bus instead of out 0).
+  - `Pattern`  → returns `Pchain(Pbindf(pattern, \out, bus), Pbind(\scvisStep, Pfunc{...}))`
+    so each scheduled Event both writes to the block's bus and pings
+    `/scvis/pat_step` over OSC, which lights up the current step in the
+    pattern preview.
   - `Event`    → mutates the Event in place (`put(\out, bus)`) and returns
     it; covers the common `(instrument: \name, ...).play` idiom. The
     Pattern and Event clauses both silently override any user-supplied

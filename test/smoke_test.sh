@@ -751,13 +751,32 @@ if not all["synth1"].active then
   errors[#errors+1] = "3j: synth1 should be active"
 end
 
--- 3k: reset clears everything
+-- 3k: bump_step advances current_step counter
+state.init(blocks)
+if all["synth1"].current_step ~= -1 then
+  errors[#errors+1] = "3k: initial current_step=" .. tostring(all["synth1"].current_step) .. ", expected -1"
+end
+state.bump_step("synth1")
+state.bump_step("synth1")
+state.bump_step("synth1")
+all = state.get_all()
+if all["synth1"].current_step ~= 2 then
+  errors[#errors+1] = "3k: after 3 bumps current_step=" .. tostring(all["synth1"].current_step) .. ", expected 2"
+end
+if not all["synth1"].active then
+  errors[#errors+1] = "3k: bump_step should activate the block"
+end
+
+-- 3l: bump_step on unknown target is a no-op
+state.bump_step("nonexistent")  -- should not error
+
+-- 3m: reset clears everything
 state.reset()
 all = state.get_all()
 local count = 0
 for _ in pairs(all) do count = count + 1 end
 if count ~= 0 then
-  errors[#errors+1] = "3k: after reset, state count=" .. count .. ", expected 0"
+  errors[#errors+1] = "3m: after reset, state count=" .. count .. ", expected 0"
 end
 
 if #errors == 0 then
@@ -783,6 +802,7 @@ if [[ "$STATE_RESULT" == *":PASS"* ]]; then
   report "State: param update" "PASS"
   report "State: deactivate_all" "PASS"
   report "State: activate_by_line" "PASS"
+  report "State: bump_step advances current_step + activates" "PASS"
   report "State: reset clears state" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \

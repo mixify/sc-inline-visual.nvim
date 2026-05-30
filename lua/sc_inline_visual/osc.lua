@@ -137,6 +137,11 @@ function M.start(callback)
       vim.schedule(function()
         callback("param", args[1], args[2], args[3])
       end)
+    elseif osc_addr == "/scvis/pat_step" and #args >= 1 then
+      -- target — fires once per scheduled Pbind event
+      vim.schedule(function()
+        callback("pat_step", args[1])
+      end)
     end
   end)
 end

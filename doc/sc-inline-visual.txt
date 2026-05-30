@@ -173,8 +173,11 @@ installs:
   - `~scvisWrap` — polymorphic decorator that routes audio through the
     per-block bus:
     - For `Function` targets: returns `{ Out.ar(bus, SynthDef.wrap(body)) }`.
-    - For `Pattern` targets:  returns `Pbindf(pattern, \\out, bus)`, so each
-      scheduled Event writes to the block's bus instead of out 0.
+    - For `Pattern` targets:  returns
+      `Pchain(Pbindf(pattern, \\out, bus), Pbind(\\scvisStep, Pfunc{...}))`,
+      so each scheduled Event writes to the block's bus AND fires a
+      `/scvis/pat_step` OSC ping that bumps `state.current_step` for the
+      block. The widget uses the counter to highlight the playing step.
     - For `Event` targets:    mutates `target.put(\\out, bus)` so the common
       `(instrument: \\name, ...).play` idiom routes through the per-block
       bus. The Pattern and Event clauses silently override any user-

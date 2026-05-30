@@ -105,16 +105,24 @@
 // Polymorphic decorator. Routes `target` so its audio writes go through the
 // per-block bus instead of out 0 — what gets returned depends on the type:
 //   Function: a new function `{ Out.ar(bus, body.value) }` ready for `.play`
-//   Pattern:  a Pbindf-wrapped pattern with \out overridden, ready for `.play`
+//   Pattern:  a Pbindf-wrapped pattern with `\out` overridden, also Pchain'd
+//             with a Pfunc that sends `/scvis/pat_step` once per event so the
+//             widget can light up the currently-playing step
 //   Event:    the same Event with `\out` keyed to the bus, ready for `.play`
 //             (covers the common `(instrument: \name, ...).play` idiom)
 // Note: Pattern and Event clauses silently override any user-supplied `\out`.
 // Adding support for a new playable type is a single case clause.
 ~scvisWrap = { |parentName, target|
     var bus = ~scvisEnsureBus.value(parentName);
+    var stepPing = Pfunc({
+        ~scvisAddr.sendMsg("/scvis/pat_step", parentName.asString);
+        0
+    });
     case
         { target.isKindOf(Function) } { { Out.ar(bus, SynthDef.wrap(target)) } }
-        { target.isKindOf(Pattern)  } { Pbindf(target, \out, bus) }
+        { target.isKindOf(Pattern)  } {
+            Pchain(Pbindf(target, \out, bus), Pbind(\scvisStep, stepPing))
+        }
         { target.isKindOf(Event)    } { target.put(\out, bus); target }
         { target };
 };
