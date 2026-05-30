@@ -70,7 +70,8 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
      read out of the block source
    - **pattern preview** for `Pbind`/`Pbindef` blocks, with the currently
      playing step highlighted in real time (each scheduled event sends a
-     `/scvis/pat_step` ping back to Neovim)
+     `/scvis/pat_step` ping back to Neovim) and a `│··│··▲··│··` beat-grid
+     row showing where in the pattern you are
 
 Try the bundled examples:
 

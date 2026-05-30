@@ -1297,6 +1297,109 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────
+# TEST 6: pattern widget beat grid
+# ─────────────────────────────────────────────────────────────
+header "Test 6: pattern widget beat grid + playhead"
+
+cat > "$TEST_DIR/_tmp_grid_test.lua" << 'LUAEOF'
+-- Verify that the snap-only beat grid row renders with `│··` cells and that
+-- the playhead (▲) lands on the column matching `current_step % n_cells`.
+vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
+package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
+package.loaded["scnvim.sclang"] = { is_running = function() return false end }
+package.loaded["scnvim.editor"] = {}
+
+local widgets_pat = require("sc_inline_visual.widgets.pattern")
+local errors = {}
+
+-- Concatenate the text content of a segment list into a flat string.
+local function flatten(segs)
+  local parts = {}
+  for _, seg in ipairs(segs) do
+    parts[#parts + 1] = seg[1]
+  end
+  return table.concat(parts)
+end
+
+-- ── 6a: grid with no playhead (current_step nil) is all │ ──
+local segs_a = widgets_pat._beat_grid(nil, 4, 3)
+local text_a = flatten(segs_a)
+if text_a ~= "  beat │··│··│··│··" then
+  errors[#errors+1] = "6a: idle grid mismatch, got: '" .. text_a .. "'"
+end
+
+-- ── 6b: playhead at step 0 -> first `│` becomes `▲` ──
+local segs_b = widgets_pat._beat_grid(0, 4, 3)
+local text_b = flatten(segs_b)
+if text_b ~= "  beat ▲··│··│··│··" then
+  errors[#errors+1] = "6b: step 0 grid mismatch, got: '" .. text_b .. "'"
+end
+
+-- ── 6c: playhead at step 2 -> third `│` becomes `▲` ──
+local segs_c = widgets_pat._beat_grid(2, 4, 3)
+local text_c = flatten(segs_c)
+if text_c ~= "  beat │··│··▲··│··" then
+  errors[#errors+1] = "6c: step 2 grid mismatch, got: '" .. text_c .. "'"
+end
+
+-- ── 6d: playhead modulos around n_cells (step 6 of 4-cell grid) ──
+local segs_d = widgets_pat._beat_grid(6, 4, 3)
+local text_d = flatten(segs_d)
+if text_d ~= "  beat │··│··▲··│··" then
+  errors[#errors+1] = "6d: step 6 (=2 mod 4) mismatch, got: '" .. text_d .. "'"
+end
+
+-- ── 6e: pattern_preview appends a grid row after the value rows ──
+local params = {
+  { key = "midinote", values = { 60, 62, 67 } },
+}
+local rows = widgets_pat.pattern_preview(params, 1)
+-- Expect: separator row, midinote row, grid row = 3 rows
+if #rows ~= 3 then
+  errors[#errors+1] = "6e: expected 3 rows (sep+midi+grid), got: " .. #rows
+end
+local grid_text = flatten(rows[#rows])
+if not grid_text:match("^  beat ") then
+  errors[#errors+1] = "6e: last row should be the beat grid, got: '" .. grid_text .. "'"
+end
+if not grid_text:match("▲") then
+  errors[#errors+1] = "6e: grid should contain a ▲ playhead, got: '" .. grid_text .. "'"
+end
+
+-- ── 6f: pattern_preview without current_step renders grid with no ▲ ──
+local rows_f = widgets_pat.pattern_preview(params, nil)
+local grid_f = flatten(rows_f[#rows_f])
+if grid_f:match("▲") then
+  errors[#errors+1] = "6f: idle pattern should not have a playhead, got: '" .. grid_f .. "'"
+end
+
+if #errors == 0 then
+  print("GRID_RESULT:PASS")
+else
+  for _, e in ipairs(errors) do io.stderr:write("  grid error: " .. e .. "\n") end
+  print("GRID_RESULT:FAIL")
+end
+LUAEOF
+
+GRID_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+  -c "luafile $TEST_DIR/_tmp_grid_test.lua" \
+  -c "qa!" 2>&1 | grep "GRID_RESULT:" | head -1 || true)
+
+if [[ "$GRID_RESULT" == *":PASS"* ]]; then
+  report "grid: idle row is all │" "PASS"
+  report "grid: ▲ at step 0 column" "PASS"
+  report "grid: ▲ at step 2 column" "PASS"
+  report "grid: ▲ wraps modulo n_cells" "PASS"
+  report "grid: pattern_preview appends grid row" "PASS"
+  report "grid: idle pattern has no ▲" "PASS"
+else
+  PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+    -c "luafile $TEST_DIR/_tmp_grid_test.lua" \
+    -c "qa!" 2>&1 | head -30 >&2
+  report "Test 6: pattern widget beat grid" "FAIL"
+fi
+
+# ─────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────
 printf "\n\033[1m=== Summary ===\033[0m\n"
