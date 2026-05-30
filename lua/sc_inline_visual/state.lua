@@ -62,6 +62,16 @@ function M.mark_wrapped(target)
   end
 end
 
+--- Reverse of mark_wrapped — called when the SC-side parent has been GC'd,
+--- so the block falls back to _master broadcast until it's played again.
+function M.unmark_wrapped(target)
+  local s = targets[target]
+  if s then
+    s.monitored = false
+    s.last_update = 0
+  end
+end
+
 --- Mark a block as active (user evaluated it).
 function M.activate(target)
   local s = targets[target]

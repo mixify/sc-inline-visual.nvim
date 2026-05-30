@@ -117,6 +117,19 @@ OSCdef(\scvisNdefReply, { |msg|
     };
 }, '/scvis/ndef').fix;
 
+// Free a single parent block's bus/router/monitor (idle GC from Lua side).
+// ~scvisNdefMap is intentionally kept so a recurring block name keeps the same tid.
+~scvisFreeParent = { |parentName|
+    var sym = parentName.asSymbol;
+    ~scvisParentMonitors.at(sym) !? { |s| s.free };
+    ~scvisParentRouters .at(sym) !? { |s| s.free };
+    ~scvisParentBuses   .at(sym) !? { |b| b.free };
+    ~scvisParentMonitors.removeAt(sym);
+    ~scvisParentRouters .removeAt(sym);
+    ~scvisParentBuses   .removeAt(sym);
+    ("SCInlineVisual: freed parent " ++ parentName).postln;
+};
+
 // On CmdPeriod the server frees every synth, so the dict values are stale refs —
 // just clear them. Buses are client-side allocator state and MUST be .free'd, or
 // the next bus index will collide. ~scvisNdefMap is intentionally preserved so a

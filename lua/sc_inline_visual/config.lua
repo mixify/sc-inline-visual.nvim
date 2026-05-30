@@ -14,4 +14,13 @@ return {
 
   -- Emit vim.notify on start / stop. Set false for a silent setup.
   notify = true,
+
+  -- Idle parent-block GC. After a parent block's monitor has been silent for
+  -- this many seconds, the SC bus / router / monitor synths are freed (the
+  -- next .play call re-allocates). Set to 0 to disable. ~scvisNdefMap entries
+  -- are NOT removed so tid stays stable if the block name recurs.
+  idle_gc_seconds = 60,
+
+  -- How often the GC sweep runs (seconds).
+  idle_gc_check_seconds = 5,
 }

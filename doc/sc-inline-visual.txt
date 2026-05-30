@@ -31,6 +31,8 @@ Status: experimental.
 
 - Neovim ≥ 0.10 (uses |vim.uv|)
 - scnvim <https://github.com/davidgranstrom/scnvim> in the same session
+- nvim-treesitter <https://github.com/nvim-treesitter/nvim-treesitter> with the
+  `supercollider` parser installed (`:TSInstall supercollider`)
 - SuperCollider (`sclang`, `scsynth`) on `$PATH`
 
 ==============================================================================
@@ -59,10 +61,12 @@ The plugin works out of the box; |setup()| only overrides defaults.
 Defaults: >
 
     require("sc_inline_visual").setup({
-      port       = 57121,  -- UDP port for OSC packets between Neovim and SC
-      render_fps = 30,     -- Lua render loop AND SC analysis SendReply rate
-      auto_start = true,   -- start on first `supercollider` filetype
-      notify     = true,   -- vim.notify start / stop announcements
+      port                  = 57121,
+      render_fps            = 30,
+      auto_start            = true,
+      notify                = true,
+      idle_gc_seconds       = 60,
+      idle_gc_check_seconds = 5,
     })
 <
                                                   *sc-inline-visual-port*
@@ -86,6 +90,13 @@ Defaults: >
 `notify`
     Gate for the "SCInlineVisual: started / stopped" notifications. Warning
     and error messages are unaffected.
+
+                                                  *sc-inline-visual-idle-gc*
+`idle_gc_seconds` / `idle_gc_check_seconds`
+    After a parent block's monitor has been silent for `idle_gc_seconds` the
+    plugin asks SC to free the block's bus / router / monitor synths (next
+    `.play` re-allocates). Set `idle_gc_seconds = 0` to disable.
+    `idle_gc_check_seconds` is how often the sweep runs.
 
 ==============================================================================
 5. COMMANDS                                        *sc-inline-visual-commands*
@@ -178,11 +189,13 @@ so a block keeps its OSC routing identity.
 ==============================================================================
 9. LIMITATIONS                                  *sc-inline-visual-limitations*
 
-- Per-block buses and monitor synths persist until `CmdPeriod` or
-  |:SCInlineVisualStop|. A long session that evaluates many distinct block
-  names accumulates them; idle-timeout GC is on the roadmap.
+- A long session that evaluates many distinct block names will accumulate
+  per-block buses; idle GC (default 60 s) frees them when their monitor goes
+  silent. The next `.play` re-allocates.
 - The envelope renderer only reads `Env.new([...], [...])` literals statically
   from the buffer source — runtime envelopes built by expressions don't show.
+- The buffer scanner requires the `supercollider` tree-sitter parser. Without
+  it the plugin still loads but no blocks are detected.
 - Tested on macOS with `scsynth` + JACK. Other setups should work but are
   unverified.
 

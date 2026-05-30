@@ -8,6 +8,7 @@ local M = {}
 
 local running = false
 local timer = nil
+local gc_timer = nil
 local tracked_bufs = {} -- bufnr -> { rescan_autocmd_id }
 local on_send_replaced = false
 
@@ -125,6 +126,24 @@ function M.start()
     end
   end))
 
+  if config.idle_gc_seconds > 0 then
+    local check_ms = math.max(1, config.idle_gc_check_seconds) * 1000
+    gc_timer = vim.uv.new_timer()
+    gc_timer:start(check_ms, check_ms, vim.schedule_wrap(function()
+      local now_s = vim.uv.hrtime() / 1e9
+      for target, s in pairs(state.get_all()) do
+        if s.monitored
+          and s.last_update > 0
+          and (now_s - s.last_update) > config.idle_gc_seconds
+          and s.amp <= 0.005
+        then
+          send_to_sclang(string.format('~scvisFreeParent.value("%s")', target))
+          state.unmark_wrapped(target)
+        end
+      end
+    end))
+  end
+
   running = true
   notify("SCInlineVisual: started")
 end
@@ -156,6 +175,12 @@ function M.stop()
     timer:stop()
     timer:close()
     timer = nil
+  end
+
+  if gc_timer then
+    gc_timer:stop()
+    gc_timer:close()
+    gc_timer = nil
   end
 
   -- Remove autocmds and clear extmarks for all tracked buffers

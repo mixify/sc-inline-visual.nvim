@@ -101,12 +101,6 @@ function M.degree_to_note(deg)
   return name
 end
 
---- Convert MIDI note to note name.
-local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
-function M.midi_to_note(midi)
-  local note = NOTE_NAMES[(math.floor(midi) % 12) + 1]
-  local oct = math.floor(midi / 12) - 1
-  return note .. oct
-end
+M.midi_to_note = require("sc_inline_visual.music").midi_to_note
 
 return M

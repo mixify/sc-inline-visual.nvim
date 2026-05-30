@@ -12,6 +12,9 @@ line-plots rendered as virtual text right next to the block that produced them.
 - Neovim **≥ 0.10** (uses `vim.uv`)
 - [scnvim](https://github.com/davidgranstrom/scnvim) running in the same Neovim
   session (the plugin sends SC code through scnvim's sclang bridge)
+- [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) with the
+  `supercollider` parser installed (`:TSInstall supercollider`) — the buffer
+  scanner is tree-sitter based
 - SuperCollider (`scsynth` + `sclang`) on `$PATH`
 
 ## Install
@@ -22,16 +25,23 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 {
   "mixify/sc-inline-visual.nvim",
   ft = "supercollider",
-  dependencies = { "davidgranstrom/scnvim" },
+  dependencies = {
+    "davidgranstrom/scnvim",
+    "nvim-treesitter/nvim-treesitter",
+  },
   opts = {
     -- defaults, all optional
-    port       = 57121,  -- UDP port shared between Neovim and SC
-    render_fps = 30,     -- redraw + SC analysis SendReply rate
-    auto_start = true,   -- start on first .scd buffer
-    notify     = true,   -- vim.notify on start / stop
+    port                  = 57121,  -- UDP port shared between Neovim and SC
+    render_fps            = 30,     -- redraw + SC analysis SendReply rate
+    auto_start            = true,   -- start on first .scd buffer
+    notify                = true,   -- vim.notify on start / stop
+    idle_gc_seconds       = 60,     -- free silent block buses after this idle period (0 = off)
+    idle_gc_check_seconds = 5,      -- GC sweep interval
   },
 }
 ```
+
+Then run `:TSInstall supercollider` once to fetch the parser.
 
 The plugin loads on `.scd` filetype and auto-starts after scnvim's sclang
 process is up (polls for ~60s, then gives up silently). Set `auto_start = false`
@@ -107,12 +117,14 @@ SynthDef(\lead, { |freq = 440| Out.ar(0, SinOsc.ar(freq) * 0.2 ! 2) }).add;
 
 ## Limitations
 
-- Per-block buses and monitor synths persist until `CmdPeriod` or
-  `:SCInlineVisualStop`. A long live-coding session that evaluates many
-  distinct block names will accumulate them. Idle-timeout GC is on the
-  roadmap.
+- A long live-coding session that evaluates many distinct block names will
+  accumulate per-block buses; the idle GC (default 60 s, configurable) frees
+  them once their monitor has gone silent. The next `.play` on that block
+  re-allocates.
 - The envelope renderer reads `Env.new([...], [...])` literals — runtime
   values built by Lua-ish expressions don't render.
+- The buffer scanner is tree-sitter based, so the `supercollider` parser must
+  be installed. Without it the plugin still loads but no blocks are detected.
 - Tested with the macOS `scsynth` build over JACK. Other platforms should work
   but are unverified.
 
