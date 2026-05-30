@@ -46,6 +46,46 @@ local function notify(msg, level)
   if config.notify then vim.notify(msg, level or vim.log.levels.INFO) end
 end
 
+--- Replace scnvim's on_send hook so that every code chunk we send to sclang
+--- gets routed through `~scvisWrap` for the block under the cursor (or
+--- `~scvisTrackNdef` for explicit Ndefs). Idempotent and best-effort: silently
+--- skips if scnvim isn't loaded or the on_send API isn't available.
+local function setup_on_send_replacer()
+  if on_send_replaced then return end
+  local ok_editor, editor = pcall(require, "scnvim.editor")
+  if not (ok_editor and editor.on_send and editor.on_send.replace) then return end
+  local ok_sclang, sclang = pcall(require, "scnvim.sclang")
+  if not ok_sclang then return end
+
+  editor.on_send:replace(function(lines, callback)
+    if callback then lines = callback(lines) end
+    local code = table.concat(lines, "\n")
+
+    local cur_buf = vim.api.nvim_get_current_buf()
+    if not tracked_bufs[cur_buf] then M._add_buffer(cur_buf) end
+
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local target, kind = state.activate_by_line(cursor[1] - 1)
+
+    if target and (kind == "anonymous" or kind == "pdef") then
+      local wrapped, did_wrap = M._wrap_play_chain(code, target)
+      if did_wrap then
+        code = wrapped
+        state.mark_wrapped(target)
+      end
+    elseif target and kind == "ndef" then
+      state.mark_wrapped(target)
+      vim.defer_fn(function()
+        send_to_sclang(string.format('~scvisTrackNdef.value("%s")', target))
+      end, 500)
+    end
+
+    sclang.send(code)
+  end)
+
+  on_send_replaced = true
+end
+
 function M.start()
   if running then
     vim.notify("SCInlineVisual: already running", vim.log.levels.WARN)
@@ -67,45 +107,7 @@ function M.start()
   -- Send monitor synth to sclang
   M._install_monitor()
 
-  -- Replace scnvim's on_send to wrap anonymous blocks in Ndef
-  if not on_send_replaced then
-    local ok_editor, editor = pcall(require, "scnvim.editor")
-    if ok_editor and editor.on_send and editor.on_send.replace then
-      local ok_sclang, sclang = pcall(require, "scnvim.sclang")
-      if ok_sclang then
-        editor.on_send:replace(function(lines, callback)
-          if callback then lines = callback(lines) end
-
-          local code = table.concat(lines, "\n")
-          local cur_buf = vim.api.nvim_get_current_buf()
-
-          -- Auto-add new .scd buffers
-          if not tracked_bufs[cur_buf] then M._add_buffer(cur_buf) end
-
-          -- Find which block the cursor is in
-          local cursor = vim.api.nvim_win_get_cursor(0)
-          local line = cursor[1] - 1
-          local target, kind = state.activate_by_line(line)
-
-          if target and (kind == "anonymous" or kind == "pdef") then
-            local wrapped, did_wrap = M._wrap_in_ndef(code, target)
-            if did_wrap then
-              code = wrapped
-              state.mark_wrapped(target)
-            end
-          elseif target and kind == "ndef" then
-            state.mark_wrapped(target)
-            vim.defer_fn(function()
-              send_to_sclang(string.format('~scvisTrackNdef.value("%s")', target))
-            end, 500)
-          end
-
-          sclang.send(code)
-        end)
-        on_send_replaced = true
-      end
-    end
-  end
+  setup_on_send_replacer()
 
   local interval_ms = math.max(1, math.floor(1000 / config.render_fps))
   timer = vim.uv.new_timer()
@@ -225,7 +227,7 @@ end
 --- Returns `(transformed_code, true)` on success, `(code, false)` otherwise.
 --- Skips when an explicit `Ndef(` is present — those go through the dedicated
 --- `~scvisTrackNdef` path that attaches a monitor to the Ndef's own bus.
-function M._wrap_in_ndef(code, target)
+function M._wrap_play_chain(code, target)
   if code:match("Ndef%s*%(") then return code, false end
 
   -- Locate the first `}.play` or `).play` occurrence.

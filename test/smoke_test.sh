@@ -1071,9 +1071,9 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────
-# TEST 5: _wrap_in_ndef (~scvisPlayWrap) + named target state routing
+# TEST 5: _wrap_play_chain (~scvisPlayWrap) + named target state routing
 # ─────────────────────────────────────────────────────────────
-header "Test 5: _wrap_in_ndef (~scvisPlayWrap) and named target routing"
+header "Test 5: _wrap_play_chain (~scvisPlayWrap) and named target routing"
 
 cat > "$TEST_DIR/_tmp_wrap_test.lua" << 'LUAEOF'
 -- Tests the per-block .play wrapping and routing. Wrap now emits
@@ -1094,7 +1094,7 @@ local errors = {}
 
 -- ── 5a: basic { ... }.play wrapping ──
 local code_a = "{ SinOsc.ar(440) * 0.1 }.play"
-local wrapped_a, did_a = M._wrap_in_ndef(code_a, "block1")
+local wrapped_a, did_a = M._wrap_play_chain(code_a, "block1")
 if not wrapped_a:match('^~scvisWrap%.value%("block1", ') then
   errors[#errors+1] = "5a: wrapped should start with ~scvisWrap.value(\"block1\", , got: " .. wrapped_a
 end
@@ -1107,7 +1107,7 @@ end
 
 -- ── 5b: .play(args) preserves arguments ──
 local code_b = "{ SinOsc.ar(440) }.play(fadeTime: 2)"
-local wrapped_b, did_b = M._wrap_in_ndef(code_b, "block2")
+local wrapped_b, did_b = M._wrap_play_chain(code_b, "block2")
 if not wrapped_b:match("%).play%(fadeTime: 2%)$") then
   errors[#errors+1] = "5b: should preserve .play args, got: " .. wrapped_b
 end
@@ -1117,7 +1117,7 @@ end
 
 -- ── 5c: nested braces ──
 local code_c = "{ { SinOsc.ar(440) }.value * EnvGen.kr(Env.perc) }.play"
-local wrapped_c, did_c = M._wrap_in_ndef(code_c, "nested")
+local wrapped_c, did_c = M._wrap_play_chain(code_c, "nested")
 if not wrapped_c:match('^~scvisWrap%.value%("nested", ') then
   errors[#errors+1] = "5c: nested wrapping failed, got: " .. wrapped_c
 end
@@ -1131,7 +1131,7 @@ end
 
 -- ── 5d: already Ndef — should NOT wrap ──
 local code_d = 'Ndef(\\pad, { SinOsc.ar(440) }).play'
-local wrapped_d, did_d = M._wrap_in_ndef(code_d, "block3")
+local wrapped_d, did_d = M._wrap_play_chain(code_d, "block3")
 if wrapped_d ~= code_d then
   errors[#errors+1] = "5d: Ndef code should not be re-wrapped, got: " .. wrapped_d
 end
@@ -1141,7 +1141,7 @@ end
 
 -- ── 5e: no .play — should NOT wrap ──
 local code_e = "{ SinOsc.ar(440) * 0.1 }"
-local wrapped_e, did_e = M._wrap_in_ndef(code_e, "block4")
+local wrapped_e, did_e = M._wrap_play_chain(code_e, "block4")
 if wrapped_e ~= code_e then
   errors[#errors+1] = "5e: code without .play should not be wrapped"
 end
@@ -1150,7 +1150,7 @@ if did_e ~= false then
 end
 
 -- ── 5f: target embedded literally as string arg ──
-local wrapped_f, did_f = M._wrap_in_ndef("{ DC.ar(0) }.play", "myTarget")
+local wrapped_f, did_f = M._wrap_play_chain("{ DC.ar(0) }.play", "myTarget")
 if not wrapped_f:match('~scvisWrap%.value%("myTarget", ') then
   errors[#errors+1] = "5f: target arg wrong, got: " .. wrapped_f
 end
@@ -1160,7 +1160,7 @@ end
 
 -- ── 5h: Pbind(...).play wraps via ).play branch ──
 local code_h = 'Pbind(\\freq, 440, \\dur, 0.2).play'
-local wrapped_h, did_h = M._wrap_in_ndef(code_h, "pat1")
+local wrapped_h, did_h = M._wrap_play_chain(code_h, "pat1")
 if not wrapped_h:match('^~scvisWrap%.value%("pat1", Pbind%(') then
   errors[#errors+1] = "5h: Pbind wrap failed, got: " .. wrapped_h
 end
@@ -1173,7 +1173,7 @@ end
 
 -- ── 5i: Pdef(\name, Pbind(...)).play wraps the outer Pdef ──
 local code_i = 'Pdef(\\foo, Pbind(\\freq, 440)).play'
-local wrapped_i, did_i = M._wrap_in_ndef(code_i, "pat2")
+local wrapped_i, did_i = M._wrap_play_chain(code_i, "pat2")
 if not wrapped_i:match('^~scvisWrap%.value%("pat2", Pdef%(') then
   errors[#errors+1] = "5i: Pdef wrap failed, got: " .. wrapped_i
 end
@@ -1187,7 +1187,7 @@ end
 
 -- ── 5j: Ndef in the code still bypasses wrap (uses ~scvisTrackNdef path) ──
 local code_j = 'Ndef(\\bass, { SinOsc.ar(110) * 0.1 }).play'
-local wrapped_j, did_j = M._wrap_in_ndef(code_j, "block5")
+local wrapped_j, did_j = M._wrap_play_chain(code_j, "block5")
 if wrapped_j ~= code_j or did_j ~= false then
   errors[#errors+1] = "5j: Ndef should not be wrapped, got: " .. wrapped_j
 end
