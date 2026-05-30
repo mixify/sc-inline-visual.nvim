@@ -3,7 +3,6 @@
 local M = {}
 
 local targets = {} -- target_name -> state table
-local aliases = {} -- ndef_name -> original target_name (e.g. "scvis_block3" -> "block3")
 local HISTORY_LEN = 24
 local EVENT_HISTORY_LEN = 20
 local EVENT_TTL = 3.0 -- seconds
@@ -51,22 +50,16 @@ end
 
 function M.reset()
   targets = {}
-  aliases = {}
 end
 
---- Register an alias: ndef_name -> original target.
---- Once aliased, the block stops receiving _master data and gets per-ndef data instead.
-function M.set_alias(ndef_name, original_target)
-  aliases[ndef_name] = original_target
-  local s = targets[original_target]
+--- Mark a target as wrapped (either via ~scvisPlayWrap or as an explicit Ndef).
+--- Once marked, the block stops receiving _master data and is updated only
+--- through its own per-block monitor stream.
+function M.mark_wrapped(target)
+  local s = targets[target]
   if s then
     s.has_ndef = true
   end
-end
-
---- Resolve a target name through aliases.
-local function resolve(target)
-  return aliases[target] or target
 end
 
 --- Mark a block as active (user evaluated it).
@@ -133,7 +126,7 @@ local function apply_update(s, msg_type, ...)
 end
 
 function M.update(msg_type, target, ...)
-  -- "_master" goes to active blocks that DON'T have their own Ndef monitor
+  -- "_master" goes to active blocks that don't have their own per-block monitor.
   if target == "_master" then
     for _, s in pairs(targets) do
       if s.active and not s.has_ndef then
@@ -143,9 +136,9 @@ function M.update(msg_type, target, ...)
     return
   end
 
-  -- Resolve alias (e.g. "scvis_block3" -> "block3")
-  local resolved = resolve(target)
-  local s = targets[resolved]
+  -- Per-block stream: SC tags each message with the parent target name directly,
+  -- so a straight lookup is enough — no alias resolution needed.
+  local s = targets[target]
   if not s then return end
   s.active = true
   apply_update(s, msg_type, ...)

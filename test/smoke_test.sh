@@ -680,7 +680,7 @@ if math.abs(all["bass"].amp - 0.9) > 0.001 then
 end
 
 -- 3c3: After new _master update, all active blocks without has_ndef get updated.
--- bass has no alias/has_ndef, so it also receives _master.
+-- bass has no mark_wrapped/has_ndef, so it also receives _master.
 state.update("analysis", "_master", 0.7, 3000.0)
 all = state.get_all()
 if math.abs(all["synth1"].amp - 0.7) > 0.001 then
@@ -689,7 +689,7 @@ end
 if math.abs(all["synth2"].amp - 0.7) > 0.001 then
   errors[#errors+1] = "3c3: synth2.amp=" .. all["synth2"].amp .. ", expected 0.7"
 end
--- bass also gets _master since has_ndef is false (no set_alias was called)
+-- bass also gets _master since has_ndef is false (mark_wrapped was not called)
 if math.abs(all["bass"].amp - 0.7) > 0.001 then
   errors[#errors+1] = "3c3: bass.amp=" .. all["bass"].amp .. ", expected 0.7 (_master reaches it)"
 end
@@ -1053,13 +1053,14 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────
-# TEST 5: _wrap_in_ndef + named target state routing
+# TEST 5: _wrap_in_ndef (~scvisPlayWrap) + named target state routing
 # ─────────────────────────────────────────────────────────────
-header "Test 5: _wrap_in_ndef and named target routing"
+header "Test 5: _wrap_in_ndef (~scvisPlayWrap) and named target routing"
 
 cat > "$TEST_DIR/_tmp_wrap_test.lua" << 'LUAEOF'
--- Test _wrap_in_ndef and state routing for named targets.
--- We load the real init module (for _wrap_in_ndef) and state module.
+-- Tests the per-block .play wrapping and routing. Wrap now emits
+--   ~scvisPlayWrap.value("<target>", { ... }).play
+-- and state routing keys directly off the parent target name (no aliases).
 
 vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
 package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
@@ -1074,35 +1075,35 @@ local errors = {}
 
 -- ── 5a: basic { ... }.play wrapping ──
 local code_a = "{ SinOsc.ar(440) * 0.1 }.play"
-local wrapped_a, name_a = M._wrap_in_ndef(code_a, "block1")
-if not wrapped_a:match("^Ndef%(\\scvis_block1,") then
-  errors[#errors+1] = "5a: wrapped should start with Ndef, got: " .. wrapped_a
+local wrapped_a, did_a = M._wrap_in_ndef(code_a, "block1")
+if not wrapped_a:match('^~scvisPlayWrap%.value%("block1", ') then
+  errors[#errors+1] = "5a: wrapped should start with ~scvisPlayWrap.value(\"block1\", , got: " .. wrapped_a
 end
 if not wrapped_a:match("%).play$") then
   errors[#errors+1] = "5a: wrapped should end with ).play, got: " .. wrapped_a
 end
-if name_a ~= "scvis_block1" then
-  errors[#errors+1] = "5a: ndef_name=" .. tostring(name_a) .. ", expected scvis_block1"
+if did_a ~= true then
+  errors[#errors+1] = "5a: did_wrap=" .. tostring(did_a) .. ", expected true"
 end
 
 -- ── 5b: .play(args) preserves arguments ──
 local code_b = "{ SinOsc.ar(440) }.play(fadeTime: 2)"
-local wrapped_b, name_b = M._wrap_in_ndef(code_b, "block2")
+local wrapped_b, did_b = M._wrap_in_ndef(code_b, "block2")
 if not wrapped_b:match("%).play%(fadeTime: 2%)$") then
   errors[#errors+1] = "5b: should preserve .play args, got: " .. wrapped_b
 end
-if name_b ~= "scvis_block2" then
-  errors[#errors+1] = "5b: ndef_name=" .. tostring(name_b) .. ", expected scvis_block2"
+if did_b ~= true then
+  errors[#errors+1] = "5b: did_wrap=" .. tostring(did_b) .. ", expected true"
 end
 
 -- ── 5c: nested braces ──
 local code_c = "{ { SinOsc.ar(440) }.value * EnvGen.kr(Env.perc) }.play"
-local wrapped_c, name_c = M._wrap_in_ndef(code_c, "nested")
-if not wrapped_c:match("^Ndef%(\\scvis_nested,") then
+local wrapped_c, did_c = M._wrap_in_ndef(code_c, "nested")
+if not wrapped_c:match('^~scvisPlayWrap%.value%("nested", ') then
   errors[#errors+1] = "5c: nested wrapping failed, got: " .. wrapped_c
 end
-if name_c ~= "scvis_nested" then
-  errors[#errors+1] = "5c: ndef_name=" .. tostring(name_c) .. ", expected scvis_nested"
+if did_c ~= true then
+  errors[#errors+1] = "5c: did_wrap=" .. tostring(did_c) .. ", expected true"
 end
 -- The inner braces should still be present
 if not wrapped_c:match("{ SinOsc") then
@@ -1111,33 +1112,37 @@ end
 
 -- ── 5d: already Ndef — should NOT wrap ──
 local code_d = 'Ndef(\\pad, { SinOsc.ar(440) }).play'
-local wrapped_d, name_d = M._wrap_in_ndef(code_d, "block3")
+local wrapped_d, did_d = M._wrap_in_ndef(code_d, "block3")
 if wrapped_d ~= code_d then
   errors[#errors+1] = "5d: Ndef code should not be re-wrapped, got: " .. wrapped_d
 end
-if name_d ~= nil then
-  errors[#errors+1] = "5d: name should be nil for already-Ndef code, got: " .. tostring(name_d)
+if did_d ~= false then
+  errors[#errors+1] = "5d: did_wrap should be false for already-Ndef code, got: " .. tostring(did_d)
 end
 
 -- ── 5e: no .play — should NOT wrap ──
 local code_e = "{ SinOsc.ar(440) * 0.1 }"
-local wrapped_e, name_e = M._wrap_in_ndef(code_e, "block4")
+local wrapped_e, did_e = M._wrap_in_ndef(code_e, "block4")
 if wrapped_e ~= code_e then
   errors[#errors+1] = "5e: code without .play should not be wrapped"
 end
-if name_e ~= nil then
-  errors[#errors+1] = "5e: name should be nil for non-play code"
+if did_e ~= false then
+  errors[#errors+1] = "5e: did_wrap should be false for non-play code"
 end
 
--- ── 5f: ndef_name format ──
-local _, name_f = M._wrap_in_ndef("{ DC.ar(0) }.play", "myTarget")
-if name_f ~= "scvis_myTarget" then
-  errors[#errors+1] = "5f: ndef_name format wrong, got: " .. tostring(name_f)
+-- ── 5f: target embedded literally as string arg ──
+local wrapped_f, did_f = M._wrap_in_ndef("{ DC.ar(0) }.play", "myTarget")
+if not wrapped_f:match('~scvisPlayWrap%.value%("myTarget", ') then
+  errors[#errors+1] = "5f: target arg wrong, got: " .. wrapped_f
+end
+if did_f ~= true then
+  errors[#errors+1] = "5f: did_wrap=" .. tostring(did_f) .. ", expected true"
 end
 
--- ── 5g: alias system — anonymous blocks wrapped in Ndef get independent data ──
--- Simulate: parser found "block1" and "block2" as anonymous blocks
--- Plugin wrapped them in Ndef(\scvis_block1, ...) and Ndef(\scvis_block2, ...)
+-- ── 5g: wrapped blocks get per-block data, non-wrapped get _master ──
+-- Simulate: parser found block1, block2, block3 as anonymous blocks.
+-- Plugin wrapped block1 and block2 (calls state.mark_wrapped for each).
+-- block3 was not wrapped (e.g. no `{ ... }.play` in its body).
 local blocks = {
   { target = "block1", kind = "anonymous", start_line = 0, end_line = 5 },
   { target = "block2", kind = "anonymous", start_line = 7, end_line = 12 },
@@ -1145,32 +1150,27 @@ local blocks = {
 }
 state.init(blocks)
 
--- Simulate wrapping block1 and block2 in Ndef (sets alias + has_ndef)
-state.set_alias("scvis_block1", "block1")
-state.set_alias("scvis_block2", "block2")
--- block3 is NOT wrapped (no alias)
+state.mark_wrapped("block1")
+state.mark_wrapped("block2")
+-- block3 is NOT wrapped
 
 state.activate("block1")
 state.activate("block2")
 state.activate("block3")
 
--- SC sends per-ndef data for block1 and block2 with different values
-state.update("analysis", "scvis_block1", 0.8, 3000.0)
-state.update("analysis", "scvis_block2", 0.3, 1000.0)
--- SC also sends _master data (which should only go to block3 since block1/2 have ndefs)
+-- SC now tags per-block messages with the parent name directly.
+state.update("analysis", "block1", 0.8, 3000.0)
+state.update("analysis", "block2", 0.3, 1000.0)
 state.update("analysis", "_master", 0.5, 2000.0)
 
 local all = state.get_all()
 
--- block1 should have 0.8 (from its own ndef, NOT from _master)
 if math.abs(all["block1"].amp - 0.8) > 0.001 then
-  errors[#errors+1] = "5g: block1.amp=" .. all["block1"].amp .. ", expected 0.8 (from ndef)"
+  errors[#errors+1] = "5g: block1.amp=" .. all["block1"].amp .. ", expected 0.8 (per-block, not _master)"
 end
--- block2 should have 0.3 (from its own ndef, NOT from _master)
 if math.abs(all["block2"].amp - 0.3) > 0.001 then
-  errors[#errors+1] = "5g: block2.amp=" .. all["block2"].amp .. ", expected 0.3 (from ndef)"
+  errors[#errors+1] = "5g: block2.amp=" .. all["block2"].amp .. ", expected 0.3 (per-block, not _master)"
 end
--- block3 should have 0.5 (from _master, since it has no ndef)
 if math.abs(all["block3"].amp - 0.5) > 0.001 then
   errors[#errors+1] = "5g: block3.amp=" .. all["block3"].amp .. ", expected 0.5 (from _master)"
 end
@@ -1190,18 +1190,18 @@ WRAP_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
   -c "qa!" 2>&1 | grep "WRAP_RESULT:" | head -1 || true)
 
 if [[ "$WRAP_RESULT" == *":PASS"* ]]; then
-  report "wrap_in_ndef: basic {}.play wrapping" "PASS"
-  report "wrap_in_ndef: preserves .play(args)" "PASS"
-  report "wrap_in_ndef: handles nested braces" "PASS"
-  report "wrap_in_ndef: skips already-Ndef code" "PASS"
-  report "wrap_in_ndef: skips code without .play" "PASS"
-  report "wrap_in_ndef: ndef_name format correct" "PASS"
-  report "State: aliased blocks get independent data, non-aliased get _master" "PASS"
+  report "wrap: basic {}.play wrapped to ~scvisPlayWrap" "PASS"
+  report "wrap: preserves .play(args)" "PASS"
+  report "wrap: handles nested braces" "PASS"
+  report "wrap: skips already-Ndef code" "PASS"
+  report "wrap: skips code without .play" "PASS"
+  report "wrap: target string embedded correctly" "PASS"
+  report "State: wrapped blocks get per-block data, non-wrapped get _master" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
     -c "luafile $TEST_DIR/_tmp_wrap_test.lua" \
     -c "qa!" 2>&1 | head -30 >&2
-  report "Test 5: _wrap_in_ndef / named target routing" "FAIL"
+  report "Test 5: wrap / named target routing" "FAIL"
 fi
 
 # ─────────────────────────────────────────────────────────────

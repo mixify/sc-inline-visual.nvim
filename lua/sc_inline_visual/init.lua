@@ -82,23 +82,26 @@ function M.start()
           local line = cursor[1] - 1
           local target, kind = state.activate_by_line(line)
 
-          -- Wrap anonymous blocks in Ndef for per-block monitoring
-          local ndef_name = nil
+          -- Wrap anonymous { ... }.play blocks so they route through the
+          -- per-parent monitor bus (see ~scvisPlayWrap on SC side).
+          local wrapped_anon = false
           if target and kind == "anonymous" then
-            local wrapped, name = M._wrap_in_ndef(code, target)
-            if wrapped ~= code then
+            local wrapped, did_wrap = M._wrap_in_ndef(code, target)
+            if did_wrap then
               code = wrapped
-              ndef_name = name
-              state.set_alias(ndef_name, target)
+              wrapped_anon = true
+              state.mark_wrapped(target)
             end
           end
 
           sclang.send(code)
 
-          local track_name = ndef_name or (kind == "ndef" and target) or nil
-          if track_name then
+          -- For explicit Ndef blocks the user wrote, attach a monitor synth
+          -- to the Ndef bus (the ~scvisPlayWrap path handles this internally).
+          if not wrapped_anon and kind == "ndef" and target then
+            state.mark_wrapped(target)
             vim.defer_fn(function()
-              send_to_sclang(string.format('~scvisTrackNdef.value("%s")', track_name))
+              send_to_sclang(string.format('~scvisTrackNdef.value("%s")', target))
             end, 500)
           end
         end)
@@ -187,20 +190,21 @@ function M.toggle()
   end
 end
 
---- Wrap `{ ... }.play` in `Ndef(\name, { ... }).play` for per-block monitoring.
---- Returns the transformed code and the ndef name, or original code if no transformation.
+--- Wrap `{ body }.play` in `~scvisPlayWrap.value("target", { body }).play`
+--- so every invocation of the user's `.play` writes into the same per-block bus
+--- (SC side allocates bus + router + monitor lazily per parent target).
+---
+--- Returns `(transformed_code, true)` if wrapped, `(code, false)` otherwise.
+--- Skips when the code already contains an explicit Ndef/Pdef.
 function M._wrap_in_ndef(code, target)
-  -- Skip if already contains Ndef/Pdef
   if code:match("Ndef%s*%(") or code:match("Pdef%s*%(") then
-    return code, nil
+    return code, false
   end
 
-  -- Find }.play pattern (possibly with whitespace/newline between } and .play)
   local play_pattern = "}%s*%.play"
-  local close_start, close_end = code:find(play_pattern)
-  if not close_start then return code, nil end
+  local close_start, _ = code:find(play_pattern)
+  if not close_start then return code, false end
 
-  -- Find the matching { by counting braces backwards from the }
   local depth = 1
   local open_brace = nil
   for i = close_start - 1, 1, -1 do
@@ -215,15 +219,16 @@ function M._wrap_in_ndef(code, target)
       end
     end
   end
+  if not open_brace then return code, false end
 
-  if not open_brace then return code, nil end
-
-  local ndef_name = "scvis_" .. target
   local prefix = code:sub(1, open_brace - 1)
   local func_body = code:sub(open_brace, close_start) -- { ... }
   local suffix = code:sub(close_start + 1)             -- .play...
 
-  return prefix .. "Ndef(\\" .. ndef_name .. ", " .. func_body .. ")" .. suffix, ndef_name
+  return prefix
+    .. "~scvisPlayWrap.value(\"" .. target .. "\", " .. func_body .. ")"
+    .. suffix,
+    true
 end
 
 function M._install_monitor()
@@ -234,7 +239,13 @@ function M._install_monitor()
 
   send_sc_sequence({
     -- 1. Set up address + storage
-    '~scvisAddr = NetAddr("127.0.0.1", 57121); ~scvisNdefMonitors = ~scvisNdefMonitors ? IdentityDictionary.new',
+    table.concat({
+      '~scvisAddr = NetAddr("127.0.0.1", 57121);',
+      '~scvisNdefMonitors  = ~scvisNdefMonitors  ? IdentityDictionary.new;',
+      '~scvisParentBuses   = ~scvisParentBuses   ? IdentityDictionary.new;',
+      '~scvisParentRouters = ~scvisParentRouters ? IdentityDictionary.new;',
+      '~scvisParentMonitors= ~scvisParentMonitors? IdentityDictionary.new;',
+    }, " "),
 
     -- 2. SynthDefs: amp + centroid + 16-sample waveform (one cycle via Phasor sync).
     -- Ultra-light: ~5 UGens, 1 SendReply at 30fps. Just amp + centroid.
@@ -254,13 +265,50 @@ function M._install_monitor()
       '  var centroid = SpecCentroid.kr(chain);',
       '  SendReply.kr(Impulse.kr(30), \'/scvis/ndef\', [targetID, amp, centroid]);',
       '}).add;',
+      'SynthDef(\\scvis_parent_router, { |inBus = 0, outBus = 0, amp = 1.0|',
+      '  Out.ar(outBus, In.ar(inBus, 2) * amp);',
+      '}).add;',
       's.sync;',
       '~scvisMonitor = Synth.after(s.defaultGroup, \\scvis_monitor);',
       '"SCInlineVisual monitor running".postln } }',
     }, " "),
 
-    -- 3. Per-Ndef track function
+    -- 3. Per-Ndef track function (for explicit Ndefs the user writes themselves)
     '~scvisNdefMap = ~scvisNdefMap ? IdentityDictionary.new; ~scvisNdefNextID = ~scvisNdefNextID ? 0; ~scvisTrackNdef = { |name| fork { var ndef, busIdx, tid; s.sync; ndef = Ndef(name.asSymbol); if(ndef.bus.notNil, { busIdx = ndef.bus.index; tid = ~scvisNdefMap.at(name.asSymbol); if(tid.isNil, { tid = ~scvisNdefNextID; ~scvisNdefNextID = ~scvisNdefNextID + 1; ~scvisNdefMap.put(name.asSymbol, tid) }); ~scvisNdefMonitors.put(name.asSymbol, Synth.after(ndef.group, \\scvis_ndef_monitor, [\\busIndex, busIdx, \\targetID, tid])); ("SCInlineVisual: tracking Ndef " ++ name ++ " bus:" ++ busIdx ++ " id:" ++ tid).postln }) } }',
+
+    -- 3b. Per-block play wrapper: shared bus + persistent monitor per source block.
+    --     `{ body }.play` becomes `~scvisPlayWrap.value("block3", { body }).play` so that
+    --     EVERY invocation of the user's `.play` writes into the same per-block bus, and
+    --     a single monitor synth reports analysis tagged with the block's tid.
+    --     Maps allocated once-per-block: ~scvisParentBuses / Routers / Monitors / NdefMap.
+    table.concat({
+      '~scvisPlayWrap = { |parentName, body|',
+      '  var sym = parentName.asSymbol;',
+      '  var bus = ~scvisParentBuses.at(sym);',
+      '  if(bus.isNil) {',
+      '    bus = Bus.audio(s, 2);',
+      '    ~scvisParentBuses.put(sym, bus);',
+      '    fork {',
+      '      var tid, router, monitor;',
+      '      s.sync;',
+      '      tid = ~scvisNdefMap.at(sym);',
+      '      if(tid.isNil) {',
+      '        tid = ~scvisNdefNextID;',
+      '        ~scvisNdefNextID = ~scvisNdefNextID + 1;',
+      '        ~scvisNdefMap.put(sym, tid);',
+      '      };',
+      '      router = Synth.tail(s.defaultGroup, \\scvis_parent_router,',
+      '        [\\inBus, bus.index, \\outBus, 0]);',
+      '      ~scvisParentRouters.put(sym, router);',
+      '      monitor = Synth.after(router, \\scvis_ndef_monitor,',
+      '        [\\busIndex, bus.index, \\targetID, tid]);',
+      '      ~scvisParentMonitors.put(sym, monitor);',
+      '      ("SCInlineVisual: parent " ++ parentName ++ " bus:" ++ bus.index ++ " id:" ++ tid).postln;',
+      '    };',
+      '  };',
+      '  { Out.ar(~scvisParentBuses.at(sym).index, SynthDef.wrap(body)) }',
+      '}',
+    }, " "),
 
     -- 4. OSCdef for master bus — .fix survives CmdPeriod
     'OSCdef(\\scvisReply).free; OSCdef(\\scvisReply, { |msg| ~scvisAddr.sendMsg("/sc/analysis", "_master", msg[3], msg[4]) }, \'/scvis/data\').fix',
@@ -269,8 +317,24 @@ function M._install_monitor()
     'OSCdef(\\scvisNdefReply).free; OSCdef(\\scvisNdefReply, { |msg| var tid = msg[3].asInteger; var amp = msg[4]; var centroid = msg[5]; var name = ~scvisNdefMap.findKeyForValue(tid); if(name.notNil, { ~scvisAddr.sendMsg("/sc/analysis", name.asString, amp, centroid) }) }, \'/scvis/ndef\').fix',
 
     -- 6. CmdPeriod handler — restart master + clear ndef monitors.
-    --    Do NOT call .free on monitors (CmdPeriod already freed all synths).
-    '~scvisOnCmdPeriod !? { CmdPeriod.remove(~scvisOnCmdPeriod) }; ~scvisOnCmdPeriod = { ~scvisMonitor = nil; ~scvisNdefMonitors.clear; AppClock.sched(0.5, { ~scvisStartMonitor.value; nil }) }; CmdPeriod.add(~scvisOnCmdPeriod)',
+    --    Do NOT call .free on synth refs (CmdPeriod already freed all synths).
+    --    Buses MUST be freed (client-side allocator) and parent maps cleared so
+    --    the next ~scvisPlayWrap call re-allocates fresh.
+    --    ~scvisNdefMap is intentionally preserved so per-block tid stays stable
+    --    across CmdPeriod cycles (OSC routing stays consistent).
+    table.concat({
+      '~scvisOnCmdPeriod !? { CmdPeriod.remove(~scvisOnCmdPeriod) };',
+      '~scvisOnCmdPeriod = {',
+      '  ~scvisMonitor = nil;',
+      '  ~scvisNdefMonitors.clear;',
+      '  ~scvisParentBuses.do({ |bus| bus.free });',
+      '  ~scvisParentBuses.clear;',
+      '  ~scvisParentRouters.clear;',
+      '  ~scvisParentMonitors.clear;',
+      '  AppClock.sched(0.5, { ~scvisStartMonitor.value; nil });',
+      '};',
+      'CmdPeriod.add(~scvisOnCmdPeriod)',
+    }, " "),
 
     -- 7. Start the master monitor
     '~scvisStartMonitor.value',
@@ -280,7 +344,11 @@ end
 function M._remove_monitor()
   send_sc_sequence({
     '~scvisMonitor !? { ~scvisMonitor.free; ~scvisMonitor = nil }',
-    'OSCdef(\\scvisReply).free',
+    '~scvisParentRouters.do({ |s| s.free }); ~scvisParentRouters.clear',
+    '~scvisParentMonitors.do({ |s| s.free }); ~scvisParentMonitors.clear',
+    '~scvisParentBuses.do({ |b| b.free }); ~scvisParentBuses.clear',
+    '~scvisNdefMonitors.do({ |s| s.free }); ~scvisNdefMonitors.clear',
+    'OSCdef(\\scvisReply).free; OSCdef(\\scvisNdefReply).free',
     '~scvisOnCmdPeriod !? { CmdPeriod.remove(~scvisOnCmdPeriod) }; ~scvisOnCmdPeriod = nil',
     '"SCInlineVisual monitor stopped".postln',
   })
