@@ -1192,6 +1192,21 @@ if wrapped_j ~= code_j or did_j ~= false then
   errors[#errors+1] = "5j: Ndef should not be wrapped, got: " .. wrapped_j
 end
 
+-- ── 5k: Event literal (instrument: ...).play wraps with no class prefix ──
+-- The receiver is the entire `(...)` Event literal — no class identifier
+-- precedes the open paren, so the backward walk must stop at the `(`.
+local code_k = '(instrument: \\bpf_brown, freq: 500, atk: 2, rel: 4, amp: 0.6).play'
+local wrapped_k, did_k = M._wrap_play_chain(code_k, "ev1")
+if not wrapped_k:match('^~scvisWrap%.value%("ev1", %(instrument:') then
+  errors[#errors+1] = "5k: Event wrap failed, got: " .. wrapped_k
+end
+if not wrapped_k:match('%)%.play$') then
+  errors[#errors+1] = "5k: wrapped should end with ).play, got: " .. wrapped_k
+end
+if did_k ~= true then
+  errors[#errors+1] = "5k: did_wrap=" .. tostring(did_k) .. ", expected true"
+end
+
 -- ── 5g: wrapped blocks get per-block data, non-wrapped get _master ──
 -- Simulate: parser found block1, block2, block3 as anonymous blocks.
 -- Plugin wrapped block1 and block2 (calls state.mark_wrapped for each).
@@ -1252,6 +1267,7 @@ if [[ "$WRAP_RESULT" == *":PASS"* ]]; then
   report "wrap: Pbind(...).play wraps via ).play branch" "PASS"
   report "wrap: Pdef(\\name, Pbind()).play wraps the outer Pdef" "PASS"
   report "wrap: Ndef code still bypasses wrap" "PASS"
+  report "wrap: (instrument: \\name, ...).play (Event literal) wraps" "PASS"
   report "State: wrapped blocks get per-block data, non-wrapped get _master" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \

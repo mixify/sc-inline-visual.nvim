@@ -175,6 +175,10 @@ installs:
     - For `Function` targets: returns `{ Out.ar(bus, SynthDef.wrap(body)) }`.
     - For `Pattern` targets:  returns `Pbindf(pattern, \\out, bus)`, so each
       scheduled Event writes to the block's bus instead of out 0.
+    - For `Event` targets:    mutates `target.put(\\out, bus)` so the common
+      `(instrument: \\name, ...).play` idiom routes through the per-block
+      bus. The Pattern and Event clauses silently override any user-
+      supplied `\\out`.
     Adding support for new playable types is a single `case` clause on the
     SC side.
   - `~scvisTrackNdef` — attaches the same monitor synth to an `Ndef` the user

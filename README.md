@@ -105,6 +105,10 @@ A small SuperCollider script (`sc/monitor.scd`) installs:
     synth per call, freed by `doneAction` in user UGens).
   - `Pattern`  → returns `Pbindf(pattern, \out, bus)` (each scheduled Event
     writes to the block's bus instead of out 0).
+  - `Event`    → mutates the Event in place (`put(\out, bus)`) and returns
+    it; covers the common `(instrument: \name, ...).play` idiom. The
+    Pattern and Event clauses both silently override any user-supplied
+    `\out` — set it elsewhere if you really need a custom output.
 - `~scvisTrackNdef` — alternate path for explicit `Ndef`s, which have their
   own bus on the NodeProxy side; the helper just attaches a monitor synth.
 
