@@ -222,84 +222,61 @@ function M.toggle()
   end
 end
 
+--- DFS for the first `function_call` whose `.method` part names `play`. The
+--- TS grammar inlines the `_method_call` rule so the identifier appears as a
+--- direct child of the function_call node alongside the receiver field.
+local function find_play_call(node, source)
+  if node:type() == "function_call" then
+    for child in node:iter_children() do
+      if child:type() == "identifier" and vim.treesitter.get_node_text(child, source) == "play" then
+        return node
+      end
+    end
+  end
+  for child in node:iter_children() do
+    local found = find_play_call(child, source)
+    if found then return found end
+  end
+  return nil
+end
+
 --- Rewrite the first `<expr>.play` chain in `code` to route through the
 --- per-block bus: `~scvisWrap.value("<target>", <expr>).play`. `<expr>` may
---- be a function block (`{ ... }`) or a class call (`Pbind(...)`,
---- `Pdef(\name, ...)`, ...). The SC-side `~scvisWrap` dispatches on the
+--- be a function block (`{ ... }`) or any expression whose method chain ends
+--- in `.play` (`Pbind(...)`, `Pdef(\name, ...)`, `~seq.next(())`,
+--- `(instrument: ...)`, etc.). The SC-side `~scvisWrap` dispatches on the
 --- runtime type, so Lua doesn't need to distinguish.
 ---
---- Returns `(transformed_code, true)` on success, `(code, false)` otherwise.
---- Skips when an explicit `Ndef(` is present — those go through the dedicated
---- `~scvisTrackNdef` path that attaches a monitor to the Ndef's own bus.
+--- Uses tree-sitter to walk the SC AST — same parser the buffer scanner uses,
+--- so comments and string literals don't fool the match the way a regex
+--- would. Returns `(transformed_code, true)` on success, `(code, false)`
+--- when the grammar isn't loadable, no `.play` chain is present, or the user
+--- already wrote an explicit `Ndef(` (those go through the dedicated
+--- `~scvisTrackNdef` path).
 function M._wrap_play_chain(code, target)
   if code:match("Ndef%s*%(") then return code, false end
 
-  -- Locate the first `}.play` or `).play` occurrence.
-  local brace_close = select(1, code:find("}%s*%.play"))
-  local paren_close = select(1, code:find("%)%s*%.play"))
-  local close_pos, open_ch, close_ch, has_class_prefix
-  if brace_close and (not paren_close or brace_close < paren_close) then
-    close_pos, open_ch, close_ch = brace_close, "{", "}"
-  elseif paren_close then
-    close_pos, open_ch, close_ch, has_class_prefix = paren_close, "(", ")", true
-  else
-    return code, false
-  end
+  local ok, parser = pcall(vim.treesitter.get_string_parser, code, "supercollider")
+  if not ok or not parser then return code, false end
+  local trees = parser:parse()
+  if not (trees and trees[1]) then return code, false end
 
-  -- Walk backward to the matching opener.
-  local depth = 1
-  local open_pos = nil
-  for i = close_pos - 1, 1, -1 do
-    local ch = code:sub(i, i)
-    if ch == close_ch then
-      depth = depth + 1
-    elseif ch == open_ch then
-      depth = depth - 1
-      if depth == 0 then
-        open_pos = i
-        break
-      end
-    end
-  end
-  if not open_pos then return code, false end
+  local call = find_play_call(trees[1]:root(), code)
+  if not call then return code, false end
 
-  -- For `).play` the receiver also includes the class identifier or method
-  -- chain in front of the `(` — `Pbind(...)`, `Pdef(\foo, Pbind(...))`,
-  -- `~seq.next(())`, `foo.bar(x).baz(...)`, etc. Walk back through alternating
-  -- segments of identifier ↔ `.` ↔ parenthesised group until we hit
-  -- whitespace, a statement boundary, or the start of the buffer.
-  local receiver_start = open_pos
-  if has_class_prefix then
-    local i = open_pos - 1
-    while i >= 1 do
-      local ch = code:sub(i, i)
-      if ch:match("[%w_~]") or ch == "." then
-        i = i - 1
-      elseif ch == ")" then
-        local d = 1
-        i = i - 1
-        while i >= 1 and d > 0 do
-          local c = code:sub(i, i)
-          if c == ")" then
-            d = d + 1
-          elseif c == "(" then
-            d = d - 1
-          end
-          if d > 0 then i = i - 1 end
-        end
-        i = i - 1
-      else
-        break
-      end
-    end
-    receiver_start = i + 1
-  end
+  local receivers = call:field("receiver")
+  local receiver = receivers and receivers[1]
+  if not receiver then return code, false end
 
-  local prefix = code:sub(1, receiver_start - 1)
-  local receiver = code:sub(receiver_start, close_pos)
-  local suffix = code:sub(close_pos + 1)
+  -- `node:start()` / `:end_()` give 0-indexed byte offsets; convert to Lua's
+  -- 1-indexed inclusive substring bounds.
+  local _, _, recv_start = receiver:start()
+  local _, _, recv_end = receiver:end_()
+  local recv_text = code:sub(recv_start + 1, recv_end)
+  local prefix = code:sub(1, recv_start)
+  local suffix = code:sub(recv_end + 1)
 
-  return prefix .. '~scvisWrap.value("' .. target .. '", ' .. receiver .. ")" .. suffix, true
+  return prefix .. '~scvisWrap.value("' .. target .. '", ' .. recv_text .. ")" .. suffix, true
 end
 
 function M._install_monitor()

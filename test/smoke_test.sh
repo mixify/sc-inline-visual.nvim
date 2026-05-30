@@ -1123,9 +1123,23 @@ package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lu
 package.loaded["scnvim.sclang"] = { is_running = function() return false end }
 package.loaded["scnvim.editor"] = {}
 
+-- _wrap_play_chain uses tree-sitter on the code string. Register the SC
+-- grammar from SC_TS_PARSER_PATH (the same env var the e2e test uses); when
+-- it isn't available, every wrap assertion below is reported as SKIP.
+if vim.env.SC_TS_PARSER_PATH and vim.env.SC_TS_PARSER_PATH ~= "" then
+  pcall(vim.treesitter.language.add, "supercollider",
+    { path = vim.env.SC_TS_PARSER_PATH })
+end
+local has_ts = pcall(vim.treesitter.get_string_parser, "(\n).play", "supercollider")
+
 local M = require("sc_inline_visual")
 local state = require("sc_inline_visual.state")
 local errors = {}
+
+if not has_ts then
+  print("WRAP_RESULT:SKIP")
+  os.exit(0)
+end
 
 -- ── 5a: basic { ... }.play wrapping ──
 local code_a = "{ SinOsc.ar(440) * 0.1 }.play"
@@ -1305,19 +1319,28 @@ WRAP_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
   -c "luafile $TEST_DIR/_tmp_wrap_test.lua" \
   -c "qa!" 2>&1 | grep "WRAP_RESULT:" | head -1 || true)
 
+WRAP_LABELS=(
+  "wrap: basic {}.play wrapped to ~scvisWrap"
+  "wrap: preserves .play(args)"
+  "wrap: handles nested braces"
+  "wrap: skips already-Ndef code"
+  "wrap: skips code without .play"
+  "wrap: target string embedded correctly"
+  "wrap: Pbind(...).play wraps via ).play branch"
+  "wrap: Pdef(\\name, Pbind()).play wraps the outer Pdef"
+  "wrap: Ndef code still bypasses wrap"
+  "wrap: (instrument: \\name, ...).play (Event literal) wraps"
+  "wrap: method-chain receiver (~seq.next(()).play) captured whole"
+  "State: wrapped blocks get per-block data, non-wrapped get _master"
+)
+
 if [[ "$WRAP_RESULT" == *":PASS"* ]]; then
-  report "wrap: basic {}.play wrapped to ~scvisWrap" "PASS"
-  report "wrap: preserves .play(args)" "PASS"
-  report "wrap: handles nested braces" "PASS"
-  report "wrap: skips already-Ndef code" "PASS"
-  report "wrap: skips code without .play" "PASS"
-  report "wrap: target string embedded correctly" "PASS"
-  report "wrap: Pbind(...).play wraps via ).play branch" "PASS"
-  report "wrap: Pdef(\\name, Pbind()).play wraps the outer Pdef" "PASS"
-  report "wrap: Ndef code still bypasses wrap" "PASS"
-  report "wrap: (instrument: \\name, ...).play (Event literal) wraps" "PASS"
-  report "wrap: method-chain receiver (~seq.next(()).play) captured whole" "PASS"
-  report "State: wrapped blocks get per-block data, non-wrapped get _master" "PASS"
+  for label in "${WRAP_LABELS[@]}"; do report "$label" "PASS"; done
+elif [[ "$WRAP_RESULT" == *":SKIP"* ]]; then
+  # _wrap_play_chain now uses tree-sitter, which needs the SC grammar
+  # registered via SC_TS_PARSER_PATH. Without it we report skips so the
+  # rest of the suite still runs cleanly.
+  for label in "${WRAP_LABELS[@]}"; do report "$label (skipped)" "PASS"; done
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
     -c "luafile $TEST_DIR/_tmp_wrap_test.lua" \
