@@ -151,6 +151,16 @@ Run the smoke test suite (pure-Lua + UDP loopback, no sclang required):
 bash test/smoke_test.sh
 ```
 
+The tree-sitter parser tests skip by default. To exercise them locally, build
+the SC grammar once and point the test at the resulting `.so`:
+
+```sh
+git clone https://github.com/madskjeldgaard/tree-sitter-supercollider /tmp/ts-sc
+cc -o /tmp/ts-sc/supercollider.so -shared -fPIC -I /tmp/ts-sc/src \
+   /tmp/ts-sc/src/parser.c /tmp/ts-sc/src/scanner.c
+SC_TS_PARSER_PATH=/tmp/ts-sc/supercollider.so bash test/smoke_test.sh
+```
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

@@ -844,9 +844,14 @@ log("PASS:parser_loaded")
 vim.cmd("edit $TEST_DIR/_tmp_test.scd")
 local bufnr = vim.api.nvim_get_current_buf()
 
--- The parser depends on tree-sitter-supercollider. When the grammar isn't
--- available (CI without nvim-treesitter), skip parser assertions but fabricate
--- the blocks so the downstream state tests still run with realistic input.
+-- CI builds the SC parser and passes its path via SC_TS_PARSER_PATH so the
+-- parser tests below actually run. Locally without the env var, the test
+-- relies on whatever nvim-treesitter has installed in rtp (or skips).
+if vim.env.SC_TS_PARSER_PATH and vim.env.SC_TS_PARSER_PATH ~= "" then
+  pcall(vim.treesitter.language.add, "supercollider",
+    { path = vim.env.SC_TS_PARSER_PATH })
+end
+
 local ok_ts, ts_parser = pcall(vim.treesitter.get_parser, bufnr, "supercollider")
 local has_ts = ok_ts and ts_parser ~= nil
 local blocks = has_ts and parser.scan(bufnr) or {}
