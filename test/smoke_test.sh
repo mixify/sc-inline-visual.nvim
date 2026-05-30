@@ -1227,6 +1227,19 @@ if wrapped_j ~= code_j or did_j ~= false then
   errors[#errors+1] = "5j: Ndef should not be wrapped, got: " .. wrapped_j
 end
 
+-- ── 5l: method-chain receiver (~seq.next(()).play) is captured whole ──
+-- The walk-back must skip past the `.next(())` segment to grab `~seq` too,
+-- otherwise the wrap inserts `~scvisWrap.value(...)` between `~seq.` and
+-- `next(())`, producing a syntax error in sclang.
+local code_l = '~seq.next(()).play'
+local wrapped_l, did_l = M._wrap_play_chain(code_l, "chain1")
+if not wrapped_l:match('^~scvisWrap%.value%("chain1", ~seq%.next%(%(%)%)%)%.play$') then
+  errors[#errors+1] = "5l: method chain wrap mangled, got: " .. wrapped_l
+end
+if did_l ~= true then
+  errors[#errors+1] = "5l: did_wrap=" .. tostring(did_l) .. ", expected true"
+end
+
 -- ── 5k: Event literal (instrument: ...).play wraps with no class prefix ──
 -- The receiver is the entire `(...)` Event literal — no class identifier
 -- precedes the open paren, so the backward walk must stop at the `(`.
@@ -1303,6 +1316,7 @@ if [[ "$WRAP_RESULT" == *":PASS"* ]]; then
   report "wrap: Pdef(\\name, Pbind()).play wraps the outer Pdef" "PASS"
   report "wrap: Ndef code still bypasses wrap" "PASS"
   report "wrap: (instrument: \\name, ...).play (Event literal) wraps" "PASS"
+  report "wrap: method-chain receiver (~seq.next(()).play) captured whole" "PASS"
   report "State: wrapped blocks get per-block data, non-wrapped get _master" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \

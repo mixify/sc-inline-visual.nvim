@@ -116,21 +116,28 @@
 // Adding support for a new playable type is a single case clause.
 ~scvisWrap = { |parentName, target|
     var bus = ~scvisEnsureBus.value(parentName);
-    // Capture ~scvisAddr and the parent name into locals BEFORE building the
-    // event hook. The hook fires inside Event.play, which swaps the current
-    // environment to the event's own Environment — so `~scvisAddr` inside the
-    // closure would resolve to currentEnvironment[\scvisAddr] (nil) and the
-    // first event would raise DoesNotUnderstand sendMsg, halting the routine.
+    // Capture ~scvisAddr and the parent name BEFORE building the event hook.
+    // The hook fires inside Event.play, which swaps the current environment
+    // to the event's own Environment — `~scvisAddr` inside the closure would
+    // resolve to currentEnvironment[\scvisAddr] (nil) and crash the routine.
     var addr = ~scvisAddr;
     var name = parentName.asString;
+    // Pull a numeric value out of the event, treating non-numbers (e.g. the
+    // unresolved parent-prototype Functions for `\midinote` / `\freq` when the
+    // user only wrote `\degree`) as missing — otherwise sendMsg would receive
+    // a Function arg and refuse to serialise the whole packet.
+    var num = { |ev, key, default|
+        var v = ev[key];
+        if(v.isNumber, { v.asFloat }, { default.asFloat });
+    };
     var eventHook = { |ev|
         addr.sendMsg("/scvis/pat_event",
             name,
-            ev[\midinote] ? -1.0,
-            ev[\degree]   ? -999.0,
-            ev[\freq]     ? -1.0,
-            ev[\dur]      ? 0.0,
-            ev[\amp]      ? -1.0);
+            num.(ev, \midinote, -1),
+            num.(ev, \degree,   -999),
+            num.(ev, \freq,     -1),
+            num.(ev, \dur,       0),
+            num.(ev, \amp,      -1));
     };
     case
         { target.isKindOf(Function) } { { Out.ar(bus, SynthDef.wrap(target)) } }

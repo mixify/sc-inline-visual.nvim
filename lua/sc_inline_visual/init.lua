@@ -263,18 +263,36 @@ function M._wrap_play_chain(code, target)
   end
   if not open_pos then return code, false end
 
-  -- For `).play` the receiver also includes the class identifier before the `(`.
+  -- For `).play` the receiver also includes the class identifier or method
+  -- chain in front of the `(` — `Pbind(...)`, `Pdef(\foo, Pbind(...))`,
+  -- `~seq.next(())`, `foo.bar(x).baz(...)`, etc. Walk back through alternating
+  -- segments of identifier ↔ `.` ↔ parenthesised group until we hit
+  -- whitespace, a statement boundary, or the start of the buffer.
   local receiver_start = open_pos
   if has_class_prefix then
     local i = open_pos - 1
-    while i >= 1 and code:sub(i, i):match("%s") do
-      i = i - 1
+    while i >= 1 do
+      local ch = code:sub(i, i)
+      if ch:match("[%w_~]") or ch == "." then
+        i = i - 1
+      elseif ch == ")" then
+        local d = 1
+        i = i - 1
+        while i >= 1 and d > 0 do
+          local c = code:sub(i, i)
+          if c == ")" then
+            d = d + 1
+          elseif c == "(" then
+            d = d - 1
+          end
+          if d > 0 then i = i - 1 end
+        end
+        i = i - 1
+      else
+        break
+      end
     end
-    local ident_end = i
-    while i >= 1 and code:sub(i, i):match("[%w_]") do
-      i = i - 1
-    end
-    if i < ident_end then receiver_start = i + 1 end
+    receiver_start = i + 1
   end
 
   local prefix = code:sub(1, receiver_start - 1)
