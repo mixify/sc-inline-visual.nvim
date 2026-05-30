@@ -116,9 +116,16 @@
 // Adding support for a new playable type is a single case clause.
 ~scvisWrap = { |parentName, target|
     var bus = ~scvisEnsureBus.value(parentName);
+    // Capture ~scvisAddr and the parent name into locals BEFORE building the
+    // event hook. The hook fires inside Event.play, which swaps the current
+    // environment to the event's own Environment — so `~scvisAddr` inside the
+    // closure would resolve to currentEnvironment[\scvisAddr] (nil) and the
+    // first event would raise DoesNotUnderstand sendMsg, halting the routine.
+    var addr = ~scvisAddr;
+    var name = parentName.asString;
     var eventHook = { |ev|
-        ~scvisAddr.sendMsg("/scvis/pat_event",
-            parentName.asString,
+        addr.sendMsg("/scvis/pat_event",
+            name,
             ev[\midinote] ? -1.0,
             ev[\degree]   ? -999.0,
             ev[\freq]     ? -1.0,
