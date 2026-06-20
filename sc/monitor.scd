@@ -102,13 +102,56 @@
     ~scvisParentBuses.at(sym).index
 };
 
+// Pull a numeric value out of an event, treating non-numbers (e.g. the
+// unresolved parent-prototype Functions for `\midinote` / `\freq` when the
+// user only wrote `\degree`) as missing — otherwise sendMsg would receive a
+// Function arg and refuse to serialise the whole packet. Shared by the live
+// `\callback` hook and the offline future-preview pull.
+~scvisEventNum = { |ev, key, default|
+    var v = ev[key];
+    if(v.isNumber, { v.asFloat }, { default.asFloat });
+};
+
+// How many upcoming events the future-timeline widget previews per evaluation.
+~scvisPreviewCount = {{PREVIEW_COUNT}};
+
+// Offline preview of the next N events. Pulls from an INDEPENDENT `asStream`,
+// so it never touches the random state of the stream that actually plays —
+// for stochastic patterns (Prand, Pbrown, ...) this shows the *character* of
+// the next bars, not their exact future. Resolved values mirror what the live
+// `\callback` hook reports (only the keys the user wrote get real numbers;
+// lazily-derived keys like \freq stay at their sentinel). Fired once per eval.
+~scvisSendPreview = { |name, pat|
+    var addr = ~scvisAddr;
+    fork {
+        var st = pat.asStream;
+        var i = 0;
+        var stop = false;
+        while({ (i < ~scvisPreviewCount) and: { stop.not } }) {
+            var ev = st.next(());
+            if(ev.isNil) {
+                stop = true;
+            } {
+                addr.sendMsg("/scvis/pat_preview",
+                    name, i,
+                    ~scvisEventNum.(ev, \midinote, -1),
+                    ~scvisEventNum.(ev, \degree,   -999),
+                    ~scvisEventNum.(ev, \freq,     -1),
+                    ~scvisEventNum.(ev, \dur,       0),
+                    ~scvisEventNum.(ev, \amp,      -1));
+                i = i + 1;
+            };
+        };
+    };
+};
+
 // Polymorphic decorator. Routes `target` so its audio writes go through the
 // per-block bus instead of out 0 — what gets returned depends on the type:
 //   Function: a new function `{ Out.ar(bus, body.value) }` ready for `.play`
 //   Pattern:  a Pbindf-wrapped pattern with `\out` overridden, plus a
 //             `\callback` that fires once per scheduled event with the event's
-//             resolved key values — this is what the widget shows as the live
-//             history (`midi`, `freq`, `degree`, `dur`, `amp`).
+//             resolved key values (the live history), and a one-shot offline
+//             `~scvisSendPreview` for the forward timeline.
 //   Event:    the same Event with `\out` keyed to the bus, ready for `.play`
 //             (covers the common `(instrument: \name, ...).play` idiom)
 // Note: Pattern and Event clauses silently override any user-supplied `\out`,
@@ -122,26 +165,19 @@
     // resolve to currentEnvironment[\scvisAddr] (nil) and crash the routine.
     var addr = ~scvisAddr;
     var name = parentName.asString;
-    // Pull a numeric value out of the event, treating non-numbers (e.g. the
-    // unresolved parent-prototype Functions for `\midinote` / `\freq` when the
-    // user only wrote `\degree`) as missing — otherwise sendMsg would receive
-    // a Function arg and refuse to serialise the whole packet.
-    var num = { |ev, key, default|
-        var v = ev[key];
-        if(v.isNumber, { v.asFloat }, { default.asFloat });
-    };
     var eventHook = { |ev|
         addr.sendMsg("/scvis/pat_event",
             name,
-            num.(ev, \midinote, -1),
-            num.(ev, \degree,   -999),
-            num.(ev, \freq,     -1),
-            num.(ev, \dur,       0),
-            num.(ev, \amp,      -1));
+            ~scvisEventNum.(ev, \midinote, -1),
+            ~scvisEventNum.(ev, \degree,   -999),
+            ~scvisEventNum.(ev, \freq,     -1),
+            ~scvisEventNum.(ev, \dur,       0),
+            ~scvisEventNum.(ev, \amp,      -1));
     };
     case
         { target.isKindOf(Function) } { { Out.ar(bus, SynthDef.wrap(target)) } }
         { target.isKindOf(Pattern)  } {
+            ~scvisSendPreview.value(name, target);
             Pchain(Pbindf(target, \out, bus), Pbind(\callback, eventHook))
         }
         { target.isKindOf(Event)    } { target.put(\out, bus); target }

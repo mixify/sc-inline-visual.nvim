@@ -86,6 +86,45 @@ function M.parse_pbind(source)
   return params
 end
 
+--- Which Pbind key's value-expression is the cursor on? `lines` are the block's
+--- source lines, `start_line` their 0-indexed buffer offset, `params` the
+--- parsed key list, and `cur_line`/`cur_col` the 0-indexed cursor position.
+---
+--- A key owns everything from its own `\key` token up to the *next* key token,
+--- so the answer is the word of the last `\word,` token at or before the cursor
+--- — but only if that word is actually a rendered key. Every `\word` followed
+--- by a comma is treated as a region boundary (so a non-rendered key like
+--- `\scale` still ends the previous key's region, yielding nil rather than
+--- leaking the highlight onto it); symbol *values* like `\minor` aren't
+--- followed by a comma, so they're ignored. Avoids needing a full parse.
+function M.key_at_cursor(lines, start_line, params, cur_line, cur_col)
+  if not params or #params == 0 then return nil end
+  local keyset = {}
+  for _, p in ipairs(params) do
+    keyset[p.key] = true
+  end
+
+  local best_word, best_l, best_c = nil, -1, -1
+  for li, line in ipairs(lines) do
+    local abs_line = start_line + li - 1
+    local idx = 1
+    while true do
+      local s, e, kw = line:find("\\(%w+)", idx)
+      if not s then break end
+      if line:sub(e + 1):match("^%s*,") then -- a key token (value, comma follows)
+        local kc = s - 1 -- 0-indexed column of the backslash
+        local at_or_before = (abs_line < cur_line) or (abs_line == cur_line and kc <= cur_col)
+        local later_than_best = (abs_line > best_l) or (abs_line == best_l and kc > best_c)
+        if at_or_before and later_than_best then
+          best_word, best_l, best_c = kw, abs_line, kc
+        end
+      end
+      idx = e + 1
+    end
+  end
+  return keyset[best_word] and best_word or nil
+end
+
 --- Convert degree number to note name.
 function M.degree_to_note(deg)
   -- Handle negative degrees and octave wrapping

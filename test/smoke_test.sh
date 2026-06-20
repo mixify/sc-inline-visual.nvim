@@ -1465,6 +1465,173 @@ else
   report "Test 6: pattern widget live history" "FAIL"
 fi
 
+header "Test 7: LFO/Noise inline sparkline (static simulation)"
+
+cat > "$TEST_DIR/_tmp_lfo_test.lua" << 'LUAEOF'
+-- Verify the static LFO sparkline analyzer: detects control-rate UGens,
+-- simulates a representative trace, ignores comments and audio-rate carriers,
+-- and reflects the range mapping in the label.
+vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
+package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
+
+local lfo = require("sc_inline_visual.lfo")
+local errors = {}
+
+-- 7a: a control-rate noise UGen with exprange is detected, with full label.
+local r = lfo.analyze_line("var cutoff = LFNoise1.kr(0.3).exprange(300, 3000);")
+if not r then
+  errors[#errors+1] = "7a: LFNoise1.kr not detected"
+else
+  if r.name ~= "LFNoise1" then errors[#errors+1] = "7a: wrong name " .. tostring(r.name) end
+  if #r.values ~= lfo.N then errors[#errors+1] = "7a: expected " .. lfo.N .. " samples, got " .. #r.values end
+  if not (r.label:match("0.3Hz") and r.label:match("300") and r.label:match("3k")) then
+    errors[#errors+1] = "7a: label missing freq/range: '" .. r.label .. "'"
+  end
+  for _, v in ipairs(r.values) do
+    if v < 0 or v > 1 then errors[#errors+1] = "7a: value out of [0,1]: " .. v break end
+  end
+end
+
+-- 7b: a comment containing a UGen must NOT be detected.
+if lfo.analyze_line("// SinOsc.kr(2).range(1, 2) is just a note") ~= nil then
+  errors[#errors+1] = "7b: UGen inside a comment was matched"
+end
+
+-- 7c: audio-rate carriers (.ar) are intentionally ignored.
+if lfo.analyze_line("Out.ar(0, SinOsc.ar(440) * 0.1);") ~= nil then
+  errors[#errors+1] = "7c: audio-rate .ar oscillator should be ignored"
+end
+
+-- 7d: a plain expression with no UGen returns nil.
+if lfo.analyze_line("var x = a + b * 2;") ~= nil then
+  errors[#errors+1] = "7d: non-UGen line matched"
+end
+
+-- 7e: deterministic — same source yields the same trace (no flicker).
+local a1 = lfo.analyze_line("z = LFNoise0.kr(8).range(0,1);")
+local a2 = lfo.analyze_line("z = LFNoise0.kr(8).range(0,1);")
+for i = 1, #a1.values do
+  if a1.values[i] ~= a2.values[i] then errors[#errors+1] = "7e: trace not deterministic" break end
+end
+
+-- 7f: a deterministic periodic shape actually varies (not a flat line).
+local sine = lfo.analyze_line("o = SinOsc.kr(2).range(0,1);")
+local lo, hi = 1, 0
+for _, v in ipairs(sine.values) do lo = math.min(lo, v); hi = math.max(hi, v) end
+if (hi - lo) < 0.5 then errors[#errors+1] = "7f: SinOsc trace too flat (" .. lo .. ".." .. hi .. ")" end
+
+if #errors == 0 then
+  print("LFO_RESULT:PASS")
+else
+  for _, e in ipairs(errors) do io.stderr:write("  lfo error: " .. e .. "\n") end
+  print("LFO_RESULT:FAIL")
+end
+LUAEOF
+
+LFO_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+  -c "luafile $TEST_DIR/_tmp_lfo_test.lua" \
+  -c "qa!" 2>&1 | grep "LFO_RESULT:" | head -1 || true)
+
+if [[ "$LFO_RESULT" == *":PASS"* ]]; then
+  report "lfo: control-rate UGen detected with freq/range label" "PASS"
+  report "lfo: UGen inside a comment is ignored" "PASS"
+  report "lfo: audio-rate (.ar) carrier is ignored" "PASS"
+  report "lfo: non-UGen line returns nil" "PASS"
+  report "lfo: same source yields a deterministic trace" "PASS"
+  report "lfo: periodic shape varies across the window" "PASS"
+else
+  PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+    -c "luafile $TEST_DIR/_tmp_lfo_test.lua" \
+    -c "qa!" 2>&1 | head -30 >&2
+  report "Test 7: LFO sparkline" "FAIL"
+fi
+
+header "Test 8: cursor-on-key row highlight"
+
+cat > "$TEST_DIR/_tmp_cursor_test.lua" << 'LUAEOF'
+-- Verify key_at_cursor maps a cursor position to the Pbind key whose value
+-- expression it sits in, and that the widget brightens exactly that row.
+vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
+package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
+
+local pattern = require("sc_inline_visual.pattern")
+local widgets = require("sc_inline_visual.widgets")
+local errors = {}
+
+local lines = {
+  "Pbind(",
+  "  \\degree, Pseq([0,1,2], inf),",
+  "  \\dur, Pseq([0.25, 0.5], inf),",
+  "  \\amp, Pwhite(0.1, 0.3),",
+  "  \\scale, \\minor",
+  ").play;",
+}
+local start = 5
+local params = pattern.parse_pbind(table.concat(lines, "\n"))
+
+local function probe(line, col) return pattern.key_at_cursor(lines, start, params, line, col) end
+
+-- 8a: cursor inside each key's value expr resolves to that key.
+if probe(6, 20) ~= "degree" then errors[#errors+1] = "8a: degree value -> " .. tostring(probe(6,20)) end
+if probe(7, 10) ~= "dur" then errors[#errors+1] = "8a: dur value -> " .. tostring(probe(7,10)) end
+if probe(8, 10) ~= "amp" then errors[#errors+1] = "8a: amp value -> " .. tostring(probe(8,10)) end
+
+-- 8b: on the \degree token itself still highlights degree.
+if probe(6, 2) ~= "degree" then errors[#errors+1] = "8b: on token -> " .. tostring(probe(6,2)) end
+
+-- 8c: before any key (on "Pbind(") highlights nothing.
+if probe(5, 3) ~= nil then errors[#errors+1] = "8c: pre-key should be nil, got " .. tostring(probe(5,3)) end
+
+-- 8d: a non-rendered key region (\scale, \minor) highlights nothing, not the
+-- previous rendered key.
+if probe(9, 10) ~= nil then errors[#errors+1] = "8d: non-rendered key should be nil, got " .. tostring(probe(9,10)) end
+
+-- 8e: the widget brightens exactly the active row's label.
+local function label_hl(rows, key)
+  for _, row in ipairs(rows) do
+    local txt = row[1][1]
+    if txt:match(key:sub(1,4)) then return row[1][2] end
+  end
+end
+local fut = { { degree = 0, dur = 0.25, amp = 0.2 } }
+local rows = widgets.pattern_future(params, fut, "dur")
+if label_hl(rows, "dur") ~= "SCInlineVisualActive" then
+  errors[#errors+1] = "8e: active row not highlighted, got " .. tostring(label_hl(rows, "dur"))
+end
+if label_hl(rows, "degr") == "SCInlineVisualActive" then
+  errors[#errors+1] = "8e: inactive row should not be highlighted"
+end
+-- nil active key -> no row highlighted.
+local rows_none = widgets.pattern_future(params, fut, nil)
+for _, row in ipairs(rows_none) do
+  if row[1][2] == "SCInlineVisualActive" then errors[#errors+1] = "8e: nil active highlighted a row" break end
+end
+
+if #errors == 0 then
+  print("CURSOR_RESULT:PASS")
+else
+  for _, e in ipairs(errors) do io.stderr:write("  cursor error: " .. e .. "\n") end
+  print("CURSOR_RESULT:FAIL")
+end
+LUAEOF
+
+CURSOR_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+  -c "luafile $TEST_DIR/_tmp_cursor_test.lua" \
+  -c "qa!" 2>&1 | grep "CURSOR_RESULT:" | head -1 || true)
+
+if [[ "$CURSOR_RESULT" == *":PASS"* ]]; then
+  report "cursor: value-expr resolves to its key" "PASS"
+  report "cursor: on the key token highlights the key" "PASS"
+  report "cursor: before any key highlights nothing" "PASS"
+  report "cursor: non-rendered key region highlights nothing" "PASS"
+  report "cursor: widget brightens exactly the active row" "PASS"
+else
+  PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+    -c "luafile $TEST_DIR/_tmp_cursor_test.lua" \
+    -c "qa!" 2>&1 | head -30 >&2
+  report "Test 8: cursor row highlight" "FAIL"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────

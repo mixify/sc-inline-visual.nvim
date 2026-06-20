@@ -10,5 +10,6 @@ return {
   param_bar = amp.param_bar,
   env_preview = env.env_preview,
   pattern_preview = pattern.pattern_preview,
+  pattern_future = pattern.pattern_future,
   event_timeline = pattern.event_timeline,
 }

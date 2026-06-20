@@ -32,6 +32,9 @@ local function new_state(block)
     monitored = false, -- has its own per-block monitor stream; skip _master broadcast
     pat_history = {}, -- sliding window of recent Pbind events; widget reads its right-end
     last_step_time = 0,
+    pat_future = {}, -- forward preview of upcoming events (filled by /scvis/pat_preview)
+    pat_future_rev = 0, -- bumped on every preview packet so the renderer can detect refreshes
+    cursor_key = nil, -- Pbind key whose value-expr the cursor is on (for row highlight)
   }
 end
 
@@ -94,6 +97,25 @@ function M.record_event(target, midinote, degree, freq, dur, amp)
   s.active = true
 end
 
+--- Record one event of the forward preview that SC pulled offline from an
+--- independent stream (fired once per evaluation via /scvis/pat_preview).
+--- `index` is 0-based; index 0 starts a fresh batch, so we drop the previous
+--- preview window before appending. Sentinels are stored as-is; the widget
+--- renders only the keys the user actually wrote in their Pbind.
+function M.record_preview(target, index, midinote, degree, freq, dur, amp)
+  local s = targets[target]
+  if not s then return end
+  if index == 0 then s.pat_future = {} end
+  s.pat_future[index + 1] = {
+    midinote = midinote,
+    degree = degree,
+    freq = freq,
+    dur = dur,
+    amp = amp,
+  }
+  s.pat_future_rev = s.pat_future_rev + 1
+end
+
 --- Mark a block as active (user evaluated it).
 function M.activate(target)
   local s = targets[target]
@@ -127,6 +149,32 @@ end
 function M.get_kind(target)
   local s = targets[target]
   return s and s.kind or nil
+end
+
+--- Read-only lookup of the block covering a 0-indexed buffer line. Unlike
+--- `activate_by_line` this has no side effects — used by the cursor-highlight
+--- handler, which must not mark blocks active just because the cursor passes
+--- over them. Returns target, start_line, end_line.
+function M.target_at_line(line_0indexed)
+  for _, s in pairs(targets) do
+    if line_0indexed >= s.start_line and line_0indexed <= s.end_line then
+      return s.target, s.start_line, s.end_line
+    end
+  end
+  return nil
+end
+
+--- Set the Pbind key the cursor is currently on for `target` (nil to clear).
+function M.set_cursor_key(target, key)
+  local s = targets[target]
+  if s then s.cursor_key = key end
+end
+
+--- Clear the cursor-on-key highlight for every block.
+function M.clear_cursor_keys()
+  for _, s in pairs(targets) do
+    s.cursor_key = nil
+  end
 end
 
 local function apply_update(s, msg_type, ...)

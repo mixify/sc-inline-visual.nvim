@@ -142,6 +142,12 @@ function M.start(callback)
       vim.schedule(function()
         callback("pat_event", args[1], args[2], args[3], args[4], args[5], args[6])
       end)
+    elseif osc_addr == "/scvis/pat_preview" and #args >= 7 then
+      -- target, index, midinote, degree, freq, dur, amp. index 0 starts a new
+      -- preview batch (the Lua side clears the prior future window on index 0).
+      vim.schedule(function()
+        callback("pat_preview", args[1], args[2], args[3], args[4], args[5], args[6], args[7])
+      end)
     end
   end)
 end

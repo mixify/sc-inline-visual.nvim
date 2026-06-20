@@ -4,10 +4,15 @@
 local widgets = require("sc_inline_visual.widgets")
 local pattern = require("sc_inline_visual.pattern")
 local env_parser = require("sc_inline_visual.env")
+local config = require("sc_inline_visual.config")
+local lfo = require("sc_inline_visual.lfo")
+local braille = require("sc_inline_visual.widgets.braille")
 
 local M = {}
 
 local ns_id = nil
+local ns_static = nil -- source-only decorations (LFO sparklines); not cleared by the 30 Hz loop
+local static_cache = {} -- bufnr -> changedtick the LFO layer was last drawn for
 local buf_cache = {} -- bufnr -> { lines, tick }
 local last_rendered = {} -- bufnr -> { target -> { amp, centroid, events_n, params_n, pat_n, tick } }
 local parsed_cache = {} -- bufnr -> { target -> { tick, start_line, end_line, pat_params, env_info } }
@@ -27,20 +32,69 @@ local function ensure_hl()
   vim.api.nvim_set_hl(0, "SCInlineVisualAmpMid", { fg = "#cccc55", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualAmpHigh", { fg = "#cc5555", default = true })
   vim.api.nvim_set_hl(0, "SCInlineVisualAmpHot", { fg = "#ff3333", bold = true, default = true })
+  -- LFO/Noise static sparkline — teal, distinct from amp (green) and freq (tan).
+  vim.api.nvim_set_hl(0, "SCInlineVisualLFO", { fg = "#66ccbb", default = true })
+  -- Cursor-on-key row highlight in the pattern widget — bright accent, bold.
+  vim.api.nvim_set_hl(0, "SCInlineVisualActive", { fg = "#ffee99", bold = true, default = true })
 end
 
 function M.init(bufnr)
   ns_id = vim.api.nvim_create_namespace("sc_inline_visual")
+  ns_static = vim.api.nvim_create_namespace("sc_inline_visual_static")
   ensure_hl()
 end
 
+local BLOCK_CHARS = braille.BLOCK_CHARS
+
+local function sparkline_str(values)
+  local chars = {}
+  for _, v in ipairs(values) do
+    local idx = math.floor(math.max(0, math.min(1, v)) * 7 + 0.5) + 1
+    chars[#chars + 1] = BLOCK_CHARS[idx]
+  end
+  return table.concat(chars)
+end
+
+--- Render the static LFO/Noise sparkline layer: scan every source line for a
+--- control-rate UGen expression and drop a simulated sparkline at its EOL.
+--- Lives in its own namespace and depends only on source, so it's driven by
+--- buffer changes (not the 30 Hz audio loop) and persists while idle.
+function M.render_static(bufnr)
+  if not ns_static then return end
+  if config.lfo_sparkline == false then return end
+  if not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+  local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+  if static_cache[bufnr] == tick then return end
+  static_cache[bufnr] = tick
+
+  vim.api.nvim_buf_clear_namespace(bufnr, ns_static, 0, -1)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  for i, line in ipairs(lines) do
+    local r = lfo.analyze_line(line)
+    if r then
+      local virt = { { "  ", "" }, { sparkline_str(r.values), "SCInlineVisualLFO" } }
+      if r.label and #r.label > 0 then
+        virt[#virt + 1] = { "  " .. r.label, "SCInlineVisualDim" }
+      end
+      vim.api.nvim_buf_set_extmark(bufnr, ns_static, i - 1, 0, {
+        virt_text = virt,
+        virt_text_pos = "eol",
+        hl_mode = "combine",
+      })
+    end
+  end
+end
+
 function M.clear(bufnr)
-  if ns_id and bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-    vim.api.nvim_buf_clear_namespace(bufnr, ns_id, 0, -1)
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    if ns_id then vim.api.nvim_buf_clear_namespace(bufnr, ns_id, 0, -1) end
+    if ns_static then vim.api.nvim_buf_clear_namespace(bufnr, ns_static, 0, -1) end
   end
   buf_cache[bufnr] = nil
   last_rendered[bufnr] = nil
   parsed_cache[bufnr] = nil
+  static_cache[bufnr] = nil
 end
 
 local function get_buf_lines(bufnr)
@@ -79,6 +133,10 @@ function M.render(bufnr, all_states)
   if not ns_id then return end
   if not vim.api.nvim_buf_is_valid(bufnr) then return end
 
+  -- Static LFO/Noise layer: self-gates on changedtick, so this is a no-op
+  -- unless the buffer text changed since it was last drawn.
+  M.render_static(bufnr)
+
   local tick = vim.api.nvim_buf_get_changedtick(bufnr)
   local last = last_rendered[bufnr] or {}
 
@@ -101,6 +159,8 @@ function M.render(bufnr, all_states)
         or prev.events_n ~= #s.events
         or prev.params_n ~= params_n
         or prev.pat_n ~= #s.pat_history
+        or prev.fut_rev ~= s.pat_future_rev
+        or prev.cursor_key ~= s.cursor_key
         or math.abs(prev.amp - s.amp) > AMP_EPSILON
         or math.abs(prev.centroid - s.centroid) > CENTROID_EPSILON
       then
@@ -150,8 +210,16 @@ function M.render(bufnr, all_states)
     end
 
     if pc.pat_params then
-      for _, row in ipairs(widgets.pattern_preview(pc.pat_params, s.pat_history)) do
-        vis_rows[#vis_rows + 1] = row
+      local view = config.pattern_view or "future"
+      if view == "future" or view == "both" then
+        for _, row in ipairs(widgets.pattern_future(pc.pat_params, s.pat_future, s.cursor_key)) do
+          vis_rows[#vis_rows + 1] = row
+        end
+      end
+      if view == "history" or view == "both" then
+        for _, row in ipairs(widgets.pattern_preview(pc.pat_params, s.pat_history, s.cursor_key)) do
+          vis_rows[#vis_rows + 1] = row
+        end
       end
     end
     if pc.env_info then
@@ -206,6 +274,8 @@ function M.render(bufnr, all_states)
         events_n = #s.events,
         params_n = params_n,
         pat_n = #s.pat_history,
+        fut_rev = s.pat_future_rev,
+        cursor_key = s.cursor_key,
         tick = tick,
       }
     end

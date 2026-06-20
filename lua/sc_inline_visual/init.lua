@@ -1,6 +1,7 @@
 local config = require("sc_inline_visual.config")
 local osc = require("sc_inline_visual.osc")
 local parser = require("sc_inline_visual.parser")
+local pattern = require("sc_inline_visual.pattern")
 local state = require("sc_inline_visual.state")
 local renderer = require("sc_inline_visual.renderer")
 
@@ -39,6 +40,7 @@ local function load_sc(name)
   local text = table.concat(vim.fn.readfile(_plugin_root .. "sc/" .. name), "\n")
   text = text:gsub("{{PORT}}", tostring(config.port))
   text = text:gsub("{{FPS}}", tostring(config.render_fps))
+  text = text:gsub("{{PREVIEW_COUNT}}", tostring(config.pattern_preview_count))
   return text
 end
 
@@ -103,6 +105,8 @@ function M.start()
     if target == "_cmdperiod" then return end
     if msg_type == "pat_event" then
       state.record_event(target, ...)
+    elseif msg_type == "pat_preview" then
+      state.record_preview(target, ...)
     else
       state.update(msg_type, target, ...)
     end
@@ -157,6 +161,25 @@ function M.start()
   notify("SCInlineVisual: started")
 end
 
+--- Recompute which Pbind key the cursor is on, for the block under the cursor,
+--- and stash it in state so the renderer can highlight that row. Read-only with
+--- respect to block activation — hovering a block must not start monitoring it.
+local function update_cursor_highlight(bufnr)
+  if not running then return end
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local cur_line, cur_col = cursor[1] - 1, cursor[2]
+
+  state.clear_cursor_keys()
+  local target, start_line, end_line = state.target_at_line(cur_line)
+  if not target then return end
+
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start_line, end_line + 1, false)
+  local params = pattern.parse_pbind(table.concat(lines, "\n"))
+  if not params then return end
+
+  state.set_cursor_key(target, pattern.key_at_cursor(lines, start_line, params, cur_line, cur_col))
+end
+
 --- Add a buffer for tracking. Scans for blocks and sets up auto-rescan.
 function M._add_buffer(bufnr)
   if tracked_bufs[bufnr] then return end
@@ -164,7 +187,8 @@ function M._add_buffer(bufnr)
   local blocks = parser.scan(bufnr)
   state.init(blocks) -- merges with existing state
 
-  local autocmd_id = vim.api.nvim_create_autocmd("TextChanged", {
+  local ids = {}
+  ids[#ids + 1] = vim.api.nvim_create_autocmd("TextChanged", {
     buffer = bufnr,
     callback = function()
       if running then
@@ -173,8 +197,14 @@ function M._add_buffer(bufnr)
       end
     end,
   })
+  ids[#ids + 1] = vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+    buffer = bufnr,
+    callback = function()
+      update_cursor_highlight(bufnr)
+    end,
+  })
 
-  tracked_bufs[bufnr] = { autocmd_id = autocmd_id }
+  tracked_bufs[bufnr] = { autocmd_ids = ids }
 end
 
 function M.stop()
@@ -194,7 +224,9 @@ function M.stop()
 
   -- Remove autocmds and clear extmarks for all tracked buffers
   for buf, info in pairs(tracked_bufs) do
-    if info.autocmd_id then pcall(vim.api.nvim_del_autocmd, info.autocmd_id) end
+    for _, id in ipairs(info.autocmd_ids or {}) do
+      pcall(vim.api.nvim_del_autocmd, id)
+    end
     renderer.clear(buf)
   end
   tracked_bufs = {}

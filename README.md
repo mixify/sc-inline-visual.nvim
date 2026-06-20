@@ -37,6 +37,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     notify                = true,   -- vim.notify on start / stop
     idle_gc_seconds       = 60,     -- free silent block buses after this idle period (0 = off)
     idle_gc_check_seconds = 5,      -- GC sweep interval
+    pattern_view          = "future", -- "future" timeline | "history" grid | "both"
+    pattern_preview_count = 16,     -- events pulled per eval for the future timeline
   },
 }
 ```
@@ -68,12 +70,46 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
    - **frequency position bar** with the dominant note name (e.g. `A4`, `G#5`)
    - **envelope line-plot** for any `EnvGen.kr(Env.new(...))` it can statically
      read out of the block source
-   - **pattern preview** for `Pbind`/`Pbindef` blocks, rendered from the
-     *actual* values SC scheduled (every event pings `/scvis/pat_event` with
-     the resolved key values). The row shows the last N played notes /
-     durs / amps with the most recent on the right in hot colour, so
-     stochastic patterns (Pwrand, Pbrown, Prand, …) show what really
-     played instead of a misleading static-array readout.
+   - **pattern future timeline** for `Pbind`/`Pbindef` blocks (default): when
+     you evaluate the block, SC pulls the next N events from an *independent*
+     stream (`/scvis/pat_preview`) and the widget lays them out left→right as a
+     forward grid with a cumulative-time axis and one row per key you wrote —
+     so you can read the shape of the next bars *before* hearing them:
+
+     ```
+     ▸ next ╌╌╌╌╌╌╌╌╌╌╌╌╌╌▶
+     t     0    .25  .375 .5   .75
+     degr  C    D    E    D    C
+     amp   ▁    ▃    ▅    ▂    ▇
+     dur   0.25 0.12 0.12 0.5  0.25
+     ```
+
+     Because the preview stream is independent of the one that plays, stochastic
+     patterns (Pwrand, Pbrown, Prand, …) show their *character* — representative
+     of the next bars, not their exact future. Set `pattern_view` to `"history"`
+     for the original last-N-played grid (most recent on the right in hot
+     colour, rendered from `/scvis/pat_event`), or `"both"` to stack them.
+
+     Put the cursor on a key's value expression (e.g. on the `Pseq(...)` after
+     `\degree`) and that row's label lights up with a `▸` marker — so in a dense
+     `Pbind` you can see at a glance which row the expression under your cursor
+     drives.
+   - **LFO/Noise inline sparkline** for control-rate UGen expressions: a
+     *static* simulation of the signal's shape over time, drawn at the end of
+     the line — visible without evaluating, no server round-trip:
+
+     ```
+     var cutoff = LFNoise1.kr(0.3).exprange(300, 3000);  ▂▂▃▃▂▂▁▂▂▃▄▅▆▇█  0.3Hz 300–3k
+     var lfo    = SinOsc.kr(2).range(200, 800);          ▅██▅▁▁▄██▅▁▁▄██▅  2Hz 200–800
+     ```
+
+     The shape is exact for deterministic UGens (SinOsc, LFSaw, LFPulse, …) and
+     a stable, seeded sample for the noise family (LFNoise{0,1,2}, Pink/Brown,
+     Dust, …) — so you read *character* (stepped vs ramp vs smooth) and the
+     frequency / range from the label. `.exprange`/`.linexp` warp the trace the
+     way the audible parameter actually moves. Only control rate (`.kr`) is
+     sparklined — `.ar` is the audible signal, not a slow control variable. Set
+     `lfo_sparkline = false` to disable.
 
 Try the bundled examples:
 

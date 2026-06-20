@@ -23,4 +23,20 @@ return {
 
   -- How often the GC sweep runs (seconds).
   idle_gc_check_seconds = 5,
+
+  -- Pattern visualisation mode for Pbind blocks:
+  --   "future"  — preview the next N scheduled events as a forward timeline
+  --   "history" — the original sliding window of the last events that played
+  --   "both"    — future timeline followed by the recent-history grid
+  pattern_view = "future",
+
+  -- How many upcoming events the future timeline previews per evaluation.
+  -- Pulled from an independent stream, so stochastic patterns show their
+  -- character rather than the exact future. Mirrored into the SC monitor.
+  pattern_preview_count = 16,
+
+  -- Inline sparkline for control-rate UGen expressions (LFNoise, SinOsc, …).
+  -- A static, source-only simulation of the signal's shape over time, drawn at
+  -- the line's end — visible without evaluating. Set false to disable.
+  lfo_sparkline = true,
 }
