@@ -110,6 +110,15 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
      way the audible parameter actually moves. Only control rate (`.kr`) is
      sparklined — `.ar` is the audible signal, not a slow control variable. Set
      `lfo_sparkline = false` to disable.
+   - **Keyboard slider** — put the cursor on any number and nudge it with
+     `<C-Up>`/`<C-Down>` (`<C-S-Up>`/`<C-S-Down>` for ×10; prefix a count for a
+     bigger jump). The step is sized to the literal's own precision (`440`→±1,
+     `0.25`→±0.01) and the buffer text rewrites in place. When the number is a
+     live-settable control — an Ndef NamedControl default (`\freq.kr(440)`) or a
+     Pbindef key value (`\dur, 0.25`) — it's pushed to SC with a glitch-free
+     `.set`/`Pbindef` update, so you *hear* it move with no recompile while the
+     inline sparkline / readouts update with it. Other numbers still edit the
+     text (a later eval applies them). See [Keyboard slider](#keyboard-slider).
 
 Try the bundled examples:
 
@@ -131,6 +140,38 @@ Try the bundled examples:
 
 Also: `:checkhealth sc_inline_visual` verifies Neovim version, `sclang` on
 `$PATH`, scnvim availability, and that the configured port is free.
+
+## Keyboard slider
+
+Scrub the number under the cursor and hear it change live. Default keys (mapped
+buffer-locally in `supercollider` buffers):
+
+| Key                          | Action                                  |
+| ---------------------------- | --------------------------------------- |
+| `<C-Up>` / `<C-Down>`        | Step the literal ±1 of its last digit.  |
+| `<C-S-Up>` / `<C-S-Down>`    | Step ×10.                               |
+| `{count}<C-Up>`              | Step `{count}` times (e.g. `20<C-Up>`). |
+
+Configure (or disable) the keys via `config.scrub`; set any field to `""` to
+leave it unmapped and bind the `<Plug>` maps yourself:
+
+```lua
+opts = {
+  scrub = {
+    enabled  = true,
+    up       = "<C-Up>",   down      = "<C-Down>",
+    big_up   = "<C-S-Up>", big_down  = "<C-S-Down>",
+  },
+}
+-- or your own bindings:
+vim.keymap.set("n", "<A-k>", "<Plug>(ScInlineVisualScrubUp)",   { remap = true })
+vim.keymap.set("n", "<A-j>", "<Plug>(ScInlineVisualScrubDown)", { remap = true })
+```
+
+The glitch-free live update covers Ndef NamedControl defaults (`\freq.kr(440)` →
+`Ndef(\name).set(\freq, …)`) and Pbindef key scalars (`\dur, 0.25` →
+`Pbindef(\name, \dur, …)`). Any other number still scrubs the buffer text — a
+later eval applies it — but isn't pushed live (no surprise synth rebuilds).
 
 ## How it works
 

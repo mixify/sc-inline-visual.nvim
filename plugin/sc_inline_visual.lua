@@ -32,6 +32,19 @@ vim.api.nvim_create_user_command("SCInlineVisualTest", function()
   require("sc_inline_visual.osc").send_test()
 end, {})
 
+-- Keyboard-slider <Plug> maps. The configured keys (config.scrub) point at
+-- these buffer-locally; remap them directly to use your own bindings.
+for name, opts in pairs({
+  ScInlineVisualScrubUp = { dir = 1 },
+  ScInlineVisualScrubDown = { dir = -1 },
+  ScInlineVisualScrubBigUp = { dir = 1, big = true },
+  ScInlineVisualScrubBigDown = { dir = -1, big = true },
+}) do
+  vim.keymap.set("n", "<Plug>(" .. name .. ")", function()
+    require("sc_inline_visual").scrub(opts)
+  end, { silent = true, desc = "SCInlineVisual: scrub number under cursor" })
+end
+
 -- Auto-start on .scd files, waiting for scnvim to be ready.
 -- Honors require("sc_inline_visual.config").auto_start at the moment the
 -- FileType event fires, so users can disable it in their setup() call.

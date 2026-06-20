@@ -39,4 +39,18 @@ return {
   -- A static, source-only simulation of the signal's shape over time, drawn at
   -- the line's end — visible without evaluating. Set false to disable.
   lfo_sparkline = true,
+
+  -- Keyboard "slider": nudge the number under the cursor and live-push it to SC
+  -- (glitch-free `.set` for Ndef NamedControl defaults and Pbindef key values;
+  -- buffer text always updates so a later eval picks up everything else). Steps
+  -- preserve the literal's precision; prefix a count for bigger jumps. Keys are
+  -- mapped buffer-locally in supercollider buffers — set any to "" to skip it
+  -- and bind <Plug>(ScInlineVisualScrub{Up,Down,BigUp,BigDown}) yourself.
+  scrub = {
+    enabled = true,
+    up = "<C-Up>",
+    down = "<C-Down>",
+    big_up = "<C-S-Up>",
+    big_down = "<C-S-Down>",
+  },
 }

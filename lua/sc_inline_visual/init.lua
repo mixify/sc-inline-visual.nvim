@@ -2,6 +2,7 @@ local config = require("sc_inline_visual.config")
 local osc = require("sc_inline_visual.osc")
 local parser = require("sc_inline_visual.parser")
 local pattern = require("sc_inline_visual.pattern")
+local scrub = require("sc_inline_visual.scrub")
 local state = require("sc_inline_visual.state")
 local renderer = require("sc_inline_visual.renderer")
 
@@ -180,6 +181,50 @@ local function update_cursor_highlight(bufnr)
   state.set_cursor_key(target, pattern.key_at_cursor(lines, start_line, params, cur_line, cur_col))
 end
 
+--- Scrub the numeric literal under the cursor: rewrite it in the buffer (step
+--- sized to its own precision × any count) and, when it maps to a settable
+--- Ndef/Pbindef control, push the new value to SC live with no recompile.
+--- `opts.dir` is +1/-1; `opts.big` multiplies the step by 10.
+function M.scrub(opts)
+  opts = opts or {}
+  local steps = (opts.dir or 1) * (opts.big and 10 or 1) * vim.v.count1
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row0 = cursor[1] - 1
+  local line = vim.api.nvim_get_current_line()
+
+  local token = scrub.find_number(line, cursor[2])
+  if not token then return end
+
+  local _, new_text = scrub.step_value(token, steps)
+  vim.api.nvim_buf_set_text(bufnr, row0, token.s - 1, row0, token.e, { new_text })
+  vim.api.nvim_win_set_cursor(0, { row0 + 1, token.s - 1 }) -- stay on the number
+
+  local target, start_line, end_line = state.target_at_line(row0)
+  if not target then return end
+  local block = table.concat(vim.api.nvim_buf_get_lines(bufnr, start_line, end_line + 1, false), "\n")
+  local cmd = scrub.resolve_command(line, token.s, token.e, block, target, new_text)
+  if cmd then send_to_sclang(cmd) end
+end
+
+--- Map the configured scrub keys (buffer-locally) onto the <Plug> mappings.
+local function setup_scrub_maps(bufnr)
+  local sc = config.scrub
+  if not sc or sc.enabled == false then return end
+  local defs = {
+    { sc.up, "<Plug>(ScInlineVisualScrubUp)" },
+    { sc.down, "<Plug>(ScInlineVisualScrubDown)" },
+    { sc.big_up, "<Plug>(ScInlineVisualScrubBigUp)" },
+    { sc.big_down, "<Plug>(ScInlineVisualScrubBigDown)" },
+  }
+  for _, d in ipairs(defs) do
+    if d[1] and d[1] ~= "" then
+      vim.keymap.set("n", d[1], d[2], { buffer = bufnr, remap = true, silent = true })
+    end
+  end
+end
+
 --- Add a buffer for tracking. Scans for blocks and sets up auto-rescan.
 function M._add_buffer(bufnr)
   if tracked_bufs[bufnr] then return end
@@ -203,6 +248,8 @@ function M._add_buffer(bufnr)
       update_cursor_highlight(bufnr)
     end,
   })
+
+  setup_scrub_maps(bufnr)
 
   tracked_bufs[bufnr] = { autocmd_ids = ids }
 end

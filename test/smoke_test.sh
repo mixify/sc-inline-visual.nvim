@@ -1632,6 +1632,73 @@ else
   report "Test 8: cursor row highlight" "FAIL"
 fi
 
+header "Test 9: keyboard scrub (number detection, stepping, live-set mapping)"
+
+cat > "$TEST_DIR/_tmp_scrub_test.lua" << 'LUAEOF'
+-- Verify the scrub core: locate the literal under the cursor, step it at its
+-- own precision, and resolve only Ndef/Pbindef controls to a live .set command.
+vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
+package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
+
+local scrub = require("sc_inline_visual.scrub")
+local errors = {}
+local function colof(line, needle) return (line:find(needle, 1, true)) - 1 end
+
+-- 9a: number detection + precision.
+local function tok(line, needle) return scrub.find_number(line, colof(line, needle)) end
+local t = tok("  \\dur, 0.25,", "0.25")
+if not (t and t.value == 0.25 and t.decimals == 2) then errors[#errors+1] = "9a: 0.25 decimals" end
+if tok("LFNoise0.kr(0.3)", "0.3").value ~= 0.3 then errors[#errors+1] = "9a: LFNoise0 digit confused detection" end
+if scrub.find_number("5.rand", 0) ~= nil then errors[#errors+1] = "9a: method receiver 5.rand scrubbed" end
+if scrub.find_number("Out.ar(bus)", 3) ~= nil then errors[#errors+1] = "9a: matched a non-number" end
+
+-- 9b: stepping preserves precision and handles big step / sign.
+local function step(line, needle, n) local _, s = scrub.step_value(tok(line, needle), n) return s end
+if step("\\freq.kr(440)", "440", 1) ~= "441" then errors[#errors+1] = "9b: 440+1" end
+if step("\\dur, 0.25", "0.25", 1) ~= "0.26" then errors[#errors+1] = "9b: 0.25+1 precision" end
+if step("\\dur, 0.25", "0.25", -30) ~= "-0.05" then errors[#errors+1] = "9b: 0.25-30 -> " .. step("\\dur, 0.25", "0.25", -30) end
+
+-- 9c: resolve_command maps only Ndef NamedControl + Pbindef key.
+local function cmd(line, needle, src, target, v)
+  local k = tok(line, needle)
+  return scrub.resolve_command(line, k.s, k.e, src, target, v)
+end
+local ndef = "Ndef(\\lead, { SinOsc.ar(\\freq.kr(440)) })"
+if cmd(ndef, "440", ndef, "lead", "441") ~= "Ndef(\\lead).set(\\freq, 441)" then errors[#errors+1] = "9c: Ndef set" end
+local pb = "Pbindef(\\bd, \\dur, 0.25)"
+if cmd(pb, "0.25", pb, "bd", "0.26") ~= "Pbindef(\\bd, \\dur, 0.26)" then errors[#errors+1] = "9c: Pbindef set" end
+-- not live-settable: number inside a Pseq array, anon synth, plain Pdef.
+if cmd("  \\dur, Pseq([0.25, 0.5], inf)", "0.25", "Pbindef(\\x, ...", "x", "0.26") ~= nil then errors[#errors+1] = "9c: Pseq element should be nil" end
+local anon = "{ SinOsc.ar(\\freq.kr(440)) }.play"
+if cmd(anon, "440", anon, "block1", "441") ~= nil then errors[#errors+1] = "9c: anon synth should be nil" end
+local pdef = "Pdef(\\x, Pbind(\\dur, 0.25))"
+if cmd(pdef, "0.25", pdef, "x", "0.26") ~= nil then errors[#errors+1] = "9c: plain Pdef should be nil" end
+
+if #errors == 0 then
+  print("SCRUB_RESULT:PASS")
+else
+  for _, e in ipairs(errors) do io.stderr:write("  scrub error: " .. e .. "\n") end
+  print("SCRUB_RESULT:FAIL")
+end
+LUAEOF
+
+SCRUB_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+  -c "luafile $TEST_DIR/_tmp_scrub_test.lua" \
+  -c "qa!" 2>&1 | grep "SCRUB_RESULT:" | head -1 || true)
+
+if [[ "$SCRUB_RESULT" == *":PASS"* ]]; then
+  report "scrub: number detection skips identifiers/method receivers" "PASS"
+  report "scrub: stepping preserves the literal's precision" "PASS"
+  report "scrub: Ndef NamedControl resolves to a live .set" "PASS"
+  report "scrub: Pbindef key resolves to a live update" "PASS"
+  report "scrub: non-settable numbers map to no command" "PASS"
+else
+  PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+    -c "luafile $TEST_DIR/_tmp_scrub_test.lua" \
+    -c "qa!" 2>&1 | head -30 >&2
+  report "Test 9: keyboard scrub" "FAIL"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────
