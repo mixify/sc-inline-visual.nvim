@@ -197,14 +197,22 @@ function M.scrub(opts)
   local token = scrub.find_number(line, cursor[2])
   if not token then return end
 
-  local _, new_text = scrub.step_value(token, steps)
+  -- Recognise a named control before stepping so its ControlSpec can bound the
+  -- slider; unrecognised literals scrub freely.
+  local detected = scrub.detect(line, token.s, token.e)
+  local bounds = detected and scrub.spec_bounds(detected.name)
+
+  local new_text = scrub.step_value(token, steps, bounds)
   vim.api.nvim_buf_set_text(bufnr, row0, token.s - 1, row0, token.e, { new_text })
   vim.api.nvim_win_set_cursor(0, { row0 + 1, token.s - 1 }) -- stay on the number
 
+  if not detected then return end
   local target, start_line, end_line = state.target_at_line(row0)
   if not target then return end
+  -- A settable control was found by the cheap line test; read the block to
+  -- confirm the kind (and resolve the bound variable) only now, then push live.
   local block = table.concat(vim.api.nvim_buf_get_lines(bufnr, start_line, end_line + 1, false), "\n")
-  local cmd = scrub.resolve_command(line, token.s, token.e, block, target, new_text)
+  local cmd = scrub.command(detected, target, block, new_text)
   if cmd then send_to_sclang(cmd) end
 end
 
