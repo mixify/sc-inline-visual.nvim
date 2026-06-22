@@ -27,7 +27,13 @@ local SHAPES = {
   PinkNoise = "pink",
   BrownNoise = "brown",
   Dust = "dust", Dust2 = "dust",
+  Line = "line", XLine = "xline",
 }
+
+-- One-shot ramp shapes (start→end over dur), as opposed to the periodic/noise
+-- families above. Their value range is the call's own start/end args, so they
+-- bypass the freq-label and external-range-mapping paths.
+local RAMP = { line = true, xline = true }
 
 -- UGens whose first argument is a frequency (so we can show it in the label).
 -- The noise UGens take freq too; WhiteNoise/PinkNoise/etc. don't.
@@ -141,6 +147,29 @@ local function gen_signal(shape, seed, width)
   return out
 end
 
+-- Generate a one-shot ramp from `start` to `end_` as N normalised 0..1 samples.
+-- The bar always spans full height (so the *shape* reads regardless of absolute
+-- values); `exp` bends the curve the way XLine moves (dwell near the small
+-- magnitude, rush past the large one). XLine requires same-sign, nonzero ends —
+-- if that's violated we fall back to a linear ramp rather than draw garbage.
+local function gen_ramp(start, end_, exp)
+  local out = {}
+  local can_exp = exp and start ~= 0 and end_ ~= 0 and (start > 0) == (end_ > 0)
+  local lo = math.min(start, end_)
+  local span = math.abs(end_ - start)
+  for i = 1, N do
+    local t = (i - 1) / (N - 1)
+    local v
+    if can_exp then
+      v = start * (end_ / start) ^ t
+    else
+      v = start + (end_ - start) * t
+    end
+    out[i] = (span == 0) and 0.5 or clamp01((v - lo) / span)
+  end
+  return out
+end
+
 -- Map a normalised signal value through the range mapping for display. Linear
 -- mappings leave the shape untouched (the bar height *is* the signal); exp
 -- mappings warp it so the trace dwells low and spikes high, the way the audible
@@ -206,6 +235,22 @@ function M.parse_line(line)
   if not best_pos then return nil end
 
   local rest = code:sub(best_pos)
+
+  -- One-shot ramps carry their own range in `(start, end, dur)`; label shows the
+  -- direction (↗/↘) between the two, and there's no freq or external mapping.
+  if RAMP[best_shape] then
+    local sa, ea = rest:match(best_name .. "%.kr%s*%(%s*(%-?[%d%.]+)%s*,%s*(%-?[%d%.]+)")
+    local start, end_ = tonumber(sa), tonumber(ea)
+    if not (start and end_) then return nil end
+    local arrow = (end_ >= start) and "↗" or "↘"
+    return {
+      name = best_name,
+      shape = best_shape,
+      ramp = { start = start, end_ = end_, exp = (best_shape == "xline") },
+      label = best_name .. " " .. fmt_num(start) .. arrow .. fmt_num(end_),
+    }
+  end
+
   local freq = tonumber(rest:match(best_name .. "%.kr%s*%(%s*(%-?[%d%.]+)"))
   -- Pulse width is only read from an explicit `width:` keyword arg; the
   -- positional form varies per UGen, so we fall back to the 0.5 default.
@@ -235,6 +280,11 @@ end
 function M.analyze_line(line)
   local info = M.parse_line(line)
   if not info then return nil end
+  -- Ramps generate directly from start/end (already 0..1, no external warp).
+  if info.ramp then
+    local r = info.ramp
+    return { values = gen_ramp(r.start, r.end_, r.exp), label = info.label, name = info.name }
+  end
   local sig = gen_signal(info.shape, info.seed, info.width)
   if not sig then return nil end
   local values = {}

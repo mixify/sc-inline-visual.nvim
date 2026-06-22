@@ -40,10 +40,18 @@ return {
   -- the line's end — visible without evaluating. Set false to disable.
   lfo_sparkline = true,
 
+  -- Source-value sliders: for each settable control with a known ControlSpec
+  -- (\freq, \amp, \pan, \rq, …) draw a `name value lo ━●━ hi` row, the handle at
+  -- the literal in the buffer. Moves the instant you scrub it. Set false to
+  -- disable.
+  sliders = true,
+
   -- Keyboard "slider": nudge the number under the cursor and live-push it to SC
-  -- (glitch-free `.set` for Ndef NamedControl defaults and Pbindef key values;
+  -- (glitch-free `.set` for Ndef NamedControl defaults, Pbindef key values, and
+  -- synth-function arg defaults bound to a var `x = { |freq=220| … }.play`;
   -- buffer text always updates so a later eval picks up everything else). Steps
-  -- preserve the literal's precision; prefix a count for bigger jumps. Keys are
+  -- preserve the literal's precision; prefix a count for bigger jumps. Known
+  -- ControlSpec names (\freq, \amp, …) clamp the step to their range. Keys are
   -- mapped buffer-locally in supercollider buffers — set any to "" to skip it
   -- and bind <Plug>(ScInlineVisualScrub{Up,Down,BigUp,BigDown}) yourself.
   scrub = {

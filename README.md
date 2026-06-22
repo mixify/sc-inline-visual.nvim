@@ -69,7 +69,20 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
    - **amp braille meter** (left-to-right intensity)
    - **frequency position bar** with the dominant note name (e.g. `A4`, `G#5`)
    - **envelope line-plot** for any `EnvGen.kr(Env.new(...))` it can statically
-     read out of the block source
+     read out of the block source, with axis readouts — peak level (`↑`) on the
+     top row (y) and the total duration (`0–<t>`) on the bottom (x):
+
+     ```
+     env  ⢰⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  perc ↑1
+          ⢸⣿⣿⣦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+        0 ⢸⣿⣿⣿⣿⣿⣶⣦⣤⣤⣀⣀⣀⡀⠀  0–1.21s
+     ```
+
+     **Curves are honored** — segment curvature follows SC's own `Env` shapes, so
+     `perc`/`adsr` show their real convex exponential decay (default curve `-4`),
+     not a straight line. Numeric curves, the named curves (`\lin`, `\exp`,
+     `\sin`, `\wel`, `\step`, `\hold`), and `Env.new`'s per-segment curve array
+     all map through.
    - **pattern future timeline** for `Pbind`/`Pbindef` blocks (default): when
      you evaluate the block, SC pulls the next N events from an *independent*
      stream (`/scvis/pat_preview`) and the widget lays them out left→right as a
@@ -101,13 +114,16 @@ scnvim keymap: `<C-e>` on a `( ... )` block). The plugin will:
      ```
      var cutoff = LFNoise1.kr(0.3).exprange(300, 3000);  ▂▂▃▃▂▂▁▂▂▃▄▅▆▇█  0.3Hz 300–3k
      var lfo    = SinOsc.kr(2).range(200, 800);          ▅██▅▁▁▄██▅▁▁▄██▅  2Hz 200–800
+     var sweep  = XLine.kr(2000, 200, 1);                ███▆▅▄▃▂▁▁▁▁▁▁▁▁  XLine 2k↘200
      ```
 
      The shape is exact for deterministic UGens (SinOsc, LFSaw, LFPulse, …) and
      a stable, seeded sample for the noise family (LFNoise{0,1,2}, Pink/Brown,
      Dust, …) — so you read *character* (stepped vs ramp vs smooth) and the
      frequency / range from the label. `.exprange`/`.linexp` warp the trace the
-     way the audible parameter actually moves. Only control rate (`.kr`) is
+     way the audible parameter actually moves. **`Line.kr`/`XLine.kr`** one-shot
+     ramps are drawn too — direction-aware (`↗`/`↘`) with `XLine` showing its
+     exponential curve, labelled `start↗end`. Only control rate (`.kr`) is
      sparklined — `.ar` is the audible signal, not a slow control variable. Set
      `lfo_sparkline = false` to disable.
    - **Keyboard slider** — put the cursor on any number and nudge it with
@@ -168,10 +184,41 @@ vim.keymap.set("n", "<A-k>", "<Plug>(ScInlineVisualScrubUp)",   { remap = true }
 vim.keymap.set("n", "<A-j>", "<Plug>(ScInlineVisualScrubDown)", { remap = true })
 ```
 
-The glitch-free live update covers Ndef NamedControl defaults (`\freq.kr(440)` →
-`Ndef(\name).set(\freq, …)`) and Pbindef key scalars (`\dur, 0.25` →
-`Pbindef(\name, \dur, …)`). Any other number still scrubs the buffer text — a
-later eval applies it — but isn't pushed live (no surprise synth rebuilds).
+The glitch-free live update covers three settable forms:
+
+- **Ndef NamedControl defaults** — `\freq.kr(440)` → `Ndef(\name).set(\freq, …)`
+- **Pbindef key scalars** — `\dur, 0.25` → `Pbindef(\name, \dur, …)`
+- **Synth-function arg defaults bound to a var** — `x = { |freq = 220| … }.play`
+  → `x.set(\freq, …)` (also `arg freq = 220;` form). The handle is the variable
+  the function is assigned to (a `~name` or an interpreter `a`–`z`), so a bare
+  `{ … }.play` with nowhere to `.set` stays text-only. The arg survives the
+  visualization wrap because `SynthDef.wrap` keeps it a control.
+
+Any other number still scrubs the buffer text — a later eval applies it — but
+isn't pushed live (no surprise synth rebuilds).
+
+When the control name is a standard SuperCollider **ControlSpec** (`\freq`,
+`\amp`, `\pan`, `\rq`, `\detune`, `\rate`, …) the step is **clamped to that
+spec's range** — scrubbing `\amp` won't pass 1.0 or go negative, `\freq` stays
+within 20–20000. Stepping itself stays linear at the literal's own precision
+(so the buffer keeps clean numbers); the spec only bounds it. Unrecognised names
+scrub freely with no range.
+
+### Slider readout
+
+Those same spec-backed controls also get an inline **slider** drawn at the end
+of the block — the handle is the literal in the buffer, so it slides the instant
+you scrub:
+
+```
+freq    440  20 ━━━━━●━━━━━━━ 20k
+amp    0.10  0 ━●━━━━━━━━━━━ 1
+```
+
+The endpoints are the spec's min/max and the handle is positioned with the
+spec's warp (so `\freq` reads logarithmically, the way the ear hears it). Only
+controls with a known ControlSpec get a slider; everything else keeps its plain
+readout. Set `sliders = false` to disable.
 
 ## How it works
 

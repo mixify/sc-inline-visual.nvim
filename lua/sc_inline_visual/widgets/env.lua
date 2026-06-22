@@ -20,7 +20,45 @@ local ROW_HL = {
 
 local M = {}
 
---- Sample a piecewise-linear envelope at time `t`, normalised by max |value|.
+local HALF_PI = math.pi / 2
+
+--- Interpolate a single segment `y1`→`y2` at position `pos` (0..1) using the
+--- segment's `curve` — a number (SC curve value, 0 ≈ linear) or a named curve.
+--- Mirrors SuperCollider's `Env` segment shapes so the plot matches what plays.
+local function curve_interp(y1, y2, pos, curve)
+  if type(curve) == "string" then
+    if curve == "step" then
+      return y2 -- jump to target immediately
+    elseif curve == "hold" then
+      return (pos < 1) and y1 or y2 -- hold start, jump at the very end
+    elseif curve == "sin" then
+      return y1 + (y2 - y1) * (0.5 - 0.5 * math.cos(math.pi * pos)) -- S-curve
+    elseif curve == "wel" then
+      if y1 < y2 then
+        return y1 + (y2 - y1) * math.sin(HALF_PI * pos)
+      end
+      return y1 + (y2 - y1) * (1 - math.cos(HALF_PI * pos))
+    elseif curve == "exp" then
+      -- Exponential needs same-sign, nonzero ends; otherwise fall back linear.
+      local a = (math.abs(y1) < 1e-5) and (y1 < 0 and -1e-5 or 1e-5) or y1
+      local b = (math.abs(y2) < 1e-5) and (y2 < 0 and -1e-5 or 1e-5) or y2
+      if (a > 0) == (b > 0) then
+        return a * (b / a) ^ pos
+      end
+      return y1 + (y2 - y1) * pos
+    end
+    return y1 + (y2 - y1) * pos -- "lin" / unknown
+  end
+  -- Numeric SC curve value.
+  local c = curve or 0
+  if math.abs(c) < 1e-4 then
+    return y1 + (y2 - y1) * pos
+  end
+  return y1 + (y2 - y1) * (1 - math.exp(pos * c)) / (1 - math.exp(c))
+end
+
+--- Sample an envelope at time `t`, normalised by max |value|, honoring each
+--- segment's curve (the `c` on the segment's end point; nil = linear).
 local function make_level_at(pts, max_v)
   return function(t)
     if t <= pts[1].t then return pts[1].v / max_v end
@@ -28,7 +66,7 @@ local function make_level_at(pts, max_v)
       if t <= pts[i].t then
         local span = pts[i].t - pts[i - 1].t
         local frac = span > 0 and (t - pts[i - 1].t) / span or 0
-        return (pts[i - 1].v + frac * (pts[i].v - pts[i - 1].v)) / max_v
+        return curve_interp(pts[i - 1].v, pts[i].v, frac, pts[i].c) / max_v
       end
     end
     return pts[#pts].v / max_v
@@ -121,9 +159,12 @@ function M.env_preview(env)
   local total_t = pts[#pts].t
   if total_t <= 0 then return nil end
 
-  local max_v = 0
+  local max_v, peak = 0, 0
   for _, p in ipairs(pts) do
-    if math.abs(p.v) > max_v then max_v = math.abs(p.v) end
+    if math.abs(p.v) > max_v then
+      max_v = math.abs(p.v)
+      peak = p.v -- signed peak level — the y-axis extent
+    end
   end
   if max_v == 0 then max_v = 1 end
 
@@ -138,24 +179,27 @@ function M.env_preview(env)
   end
 
   local hls = ROW_HL[ROWS] or { "SCInlineVisualAmpMid" }
-  local label = total_t < 1 and string.format("%.0fms", total_t * 1000)
+  -- Axis readouts: y = peak level (top row), x = total time span (bottom row).
+  local dur_str = total_t < 1 and string.format("%.0fms", total_t * 1000)
     or string.format("%.2fs", total_t)
+  local y_top = string.format("↑%g", peak) -- y-axis: peak level
+  local x_bot = "0–" .. dur_str -- x-axis: 0 → duration
 
   local rows = {}
   for r = 0, ROWS - 1 do
     local hl = hls[r + 1] or "SCInlineVisualAmpMid"
+    -- The left gutter doubles as the y scale: peak at top, baseline at bottom.
+    local gutter = (r == 0 and "env  ") or (r == ROWS - 1 and "   0 ") or "     "
+    local row = {
+      { gutter, "SCInlineVisualDim" },
+      { row_chars(r), hl },
+    }
     if r == 0 then
-      rows[#rows + 1] = {
-        { "env  ", "SCInlineVisualDim" },
-        { row_chars(r), hl },
-        { "  " .. env.kind .. " " .. label, "SCInlineVisualDim" },
-      }
-    else
-      rows[#rows + 1] = {
-        { "     ", "SCInlineVisualDim" },
-        { row_chars(r), hl },
-      }
+      row[#row + 1] = { "  " .. env.kind .. " " .. y_top, "SCInlineVisualDim" }
+    elseif r == ROWS - 1 then
+      row[#row + 1] = { "  " .. x_bot, "SCInlineVisualDim" }
     end
+    rows[#rows + 1] = row
   end
   return rows
 end

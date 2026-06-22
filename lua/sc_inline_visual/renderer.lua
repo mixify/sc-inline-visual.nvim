@@ -2,6 +2,7 @@
 -- Compact 2-line display per block with braille density + freq position bar.
 
 local widgets = require("sc_inline_visual.widgets")
+local scrub = require("sc_inline_visual.scrub")
 local pattern = require("sc_inline_visual.pattern")
 local env_parser = require("sc_inline_visual.env")
 local config = require("sc_inline_visual.config")
@@ -205,8 +206,14 @@ function M.render(bufnr, all_states)
         end_line = s.end_line,
         pat_params = pattern.parse_pbind(block_source),
         env_info = env_parser.parse(block_source),
+        controls = config.sliders and scrub.scan_controls(block_source_lines) or {},
       }
       pc_buf[s.target] = pc
+    end
+
+    -- Source-value sliders: each spec-backed control as `name value lo ━●━ hi`.
+    for _, c in ipairs(pc.controls) do
+      vis_rows[#vis_rows + 1] = widgets.slider(c.name, c.value, c.spec)
     end
 
     if pc.pat_params then

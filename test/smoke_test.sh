@@ -1520,6 +1520,19 @@ local lo, hi = 1, 0
 for _, v in ipairs(sine.values) do lo = math.min(lo, v); hi = math.max(hi, v) end
 if (hi - lo) < 0.5 then errors[#errors+1] = "7f: SinOsc trace too flat (" .. lo .. ".." .. hi .. ")" end
 
+-- 7g: Line/XLine one-shot ramps — direction-aware, spec-free, no false collision.
+local up = lfo.analyze_line("e = Line.kr(200, 2000, 1);")
+if not up or up.name ~= "Line" then errors[#errors+1] = "7g: Line not detected" end
+if up and not (up.values[1] < 0.1 and up.values[#up.values] > 0.9) then errors[#errors+1] = "7g: Line should ramp up" end
+if up and not up.label:find("↗") then errors[#errors+1] = "7g: Line label missing ↗ (" .. (up.label or "") .. ")" end
+local down = lfo.analyze_line("f = XLine.kr(2000, 200, 1);")
+if not down or down.name ~= "XLine" then errors[#errors+1] = "7g: XLine not detected" end
+if down and not (down.values[1] > 0.9 and down.values[#down.values] < 0.1) then errors[#errors+1] = "7g: XLine should ramp down" end
+-- XLine is exponential: descending from a high start dwells low quickly (mid sample well under 0.5).
+if down and not (down.values[8] < 0.4) then errors[#errors+1] = "7g: XLine not exp-curved (mid=" .. tostring(down.values[8]) .. ")" end
+-- `Line` must NOT match inside `XLine`, and `.ar` ramps are ignored like other carriers.
+if lfo.analyze_line("Line.ar(0, 1, 1);") ~= nil then errors[#errors+1] = "7g: Line.ar should be ignored" end
+
 if #errors == 0 then
   print("LFO_RESULT:PASS")
 else
@@ -1539,6 +1552,7 @@ if [[ "$LFO_RESULT" == *":PASS"* ]]; then
   report "lfo: non-UGen line returns nil" "PASS"
   report "lfo: same source yields a deterministic trace" "PASS"
   report "lfo: periodic shape varies across the window" "PASS"
+  report "lfo: Line/XLine ramps render direction + exp curve" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
     -c "luafile $TEST_DIR/_tmp_lfo_test.lua" \
@@ -1653,15 +1667,21 @@ if scrub.find_number("5.rand", 0) ~= nil then errors[#errors+1] = "9a: method re
 if scrub.find_number("Out.ar(bus)", 3) ~= nil then errors[#errors+1] = "9a: matched a non-number" end
 
 -- 9b: stepping preserves precision and handles big step / sign.
-local function step(line, needle, n) local _, s = scrub.step_value(tok(line, needle), n) return s end
+local function step(line, needle, n) return scrub.step_value(tok(line, needle), n) end
 if step("\\freq.kr(440)", "440", 1) ~= "441" then errors[#errors+1] = "9b: 440+1" end
 if step("\\dur, 0.25", "0.25", 1) ~= "0.26" then errors[#errors+1] = "9b: 0.25+1 precision" end
 if step("\\dur, 0.25", "0.25", -30) ~= "-0.05" then errors[#errors+1] = "9b: 0.25-30 -> " .. step("\\dur, 0.25", "0.25", -30) end
+-- ControlSpec range clamps the stepped value; unknown names have no spec.
+if scrub.spec_bounds("dur") ~= nil then errors[#errors+1] = "9b: dur should have no spec" end
+if scrub.step_value(tok("\\freq.kr(440)", "440"), -1000, scrub.spec_bounds("freq")) ~= "20" then errors[#errors+1] = "9b: freq clamps to 20" end
+if scrub.step_value(tok("\\amp.kr(0.5)", "0.5"), 100, scrub.spec_bounds("amp")) ~= "1.0" then errors[#errors+1] = "9b: amp clamps to 1.0" end
 
--- 9c: resolve_command maps only Ndef NamedControl + Pbindef key.
+-- 9c: detect + command map only Ndef NamedControl + Pbindef key.
 local function cmd(line, needle, src, target, v)
   local k = tok(line, needle)
-  return scrub.resolve_command(line, k.s, k.e, src, target, v)
+  local d = scrub.detect(line, k.s, k.e) -- mirror init.M.scrub: detect, then build off the block
+  if not d then return nil end
+  return scrub.command(d, target, src, v)
 end
 local ndef = "Ndef(\\lead, { SinOsc.ar(\\freq.kr(440)) })"
 if cmd(ndef, "440", ndef, "lead", "441") ~= "Ndef(\\lead).set(\\freq, 441)" then errors[#errors+1] = "9c: Ndef set" end
@@ -1673,6 +1693,36 @@ local anon = "{ SinOsc.ar(\\freq.kr(440)) }.play"
 if cmd(anon, "440", anon, "block1", "441") ~= nil then errors[#errors+1] = "9c: anon synth should be nil" end
 local pdef = "Pdef(\\x, Pbind(\\dur, 0.25))"
 if cmd(pdef, "0.25", pdef, "x", "0.26") ~= nil then errors[#errors+1] = "9c: plain Pdef should be nil" end
+
+-- 9d: a synth-function arg default bound to a var resolves to `<var>.set`.
+local pipe = "x = { |freq = 220| SinOsc.ar(freq, 0, 0.1) }.play;"
+if cmd(pipe, "220", pipe, "block1", "230") ~= "x.set(\\freq, 230)" then errors[#errors+1] = "9d: pipe arg -> x.set" end
+local argkw = "~lead = { arg cutoff = 800; LPF.ar(in, cutoff) }.play;"
+if cmd(argkw, "800", argkw, "block2", "810") ~= "~lead.set(\\cutoff, 810)" then errors[#errors+1] = "9d: arg keyword -> ~lead.set" end
+local multi = "y = { |freq = 220, amp = 0.1| (SinOsc.ar(freq) * amp) }.play;"
+if cmd(multi, "0.1", multi, "block3", "0.2") ~= "y.set(\\amp, 0.2)" then errors[#errors+1] = "9d: 2nd arg -> y.set(amp)" end
+-- a bare `{ ... }.play` has no handle to .set, so no live command.
+local bare = "{ |freq = 220| SinOsc.ar(freq) }.play"
+if cmd(bare, "220", bare, "block4", "230") ~= nil then errors[#errors+1] = "9d: handle-less synth should be nil" end
+
+-- 9e: source-value sliders — scan_controls extracts spec-backed controls (in
+-- first-seen order, deduped, non-spec names dropped) and unmap honors warp.
+local specs = require("sc_inline_visual.specs")
+local function L(s) local t = {} for ln in (s .. "\n"):gmatch("(.-)\n") do t[#t + 1] = ln end return t end
+local sc1 = scrub.scan_controls(L("Ndef(\\lead, { VarSaw.ar(\\freq.kr(440), 0, 0.4) * \\amp.kr(0.1) })"))
+if not (#sc1 == 2 and sc1[1].name == "freq" and sc1[1].value == 440 and sc1[2].name == "amp") then
+  errors[#errors+1] = "9e: Ndef control scan (got " .. #sc1 .. ")"
+end
+-- \dur has no spec → dropped; only \freq/\amp become sliders.
+local sc2 = scrub.scan_controls(L("Pbindef(\\bd, \\dur, 0.25, \\freq, 220, \\amp, 0.2)"))
+if not (#sc2 == 2 and sc2[1].name == "freq" and sc2[2].name == "amp") then errors[#errors+1] = "9e: non-spec \\dur should drop" end
+-- negative default keeps its sign via find_number's unary-minus fold.
+local sc3 = scrub.scan_controls(L("{ Pan2.ar(sig, \\pan.kr(-0.5)) }"))
+if not (#sc3 == 1 and sc3[1].name == "pan" and sc3[1].value == -0.5) then errors[#errors+1] = "9e: negative default" end
+-- unmap: linear midpoint, exp-warped freq midpoint, out-of-range clamps.
+if math.abs(specs.unmap(specs.get("amp"), 0.5) - 0.5) > 1e-9 then errors[#errors+1] = "9e: amp lin mid" end
+if math.abs(specs.unmap(specs.get("freq"), 632.4555) - 0.5) > 1e-3 then errors[#errors+1] = "9e: freq exp mid" end
+if specs.unmap(specs.get("amp"), 9) ~= 1 then errors[#errors+1] = "9e: clamp over max" end
 
 if #errors == 0 then
   print("SCRUB_RESULT:PASS")
@@ -1689,14 +1739,81 @@ SCRUB_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
 if [[ "$SCRUB_RESULT" == *":PASS"* ]]; then
   report "scrub: number detection skips identifiers/method receivers" "PASS"
   report "scrub: stepping preserves the literal's precision" "PASS"
+  report "scrub: ControlSpec range clamps the stepped value" "PASS"
   report "scrub: Ndef NamedControl resolves to a live .set" "PASS"
   report "scrub: Pbindef key resolves to a live update" "PASS"
+  report "scrub: synth-function arg bound to a var resolves to <var>.set" "PASS"
   report "scrub: non-settable numbers map to no command" "PASS"
+  report "scrub: scan_controls extracts spec-backed sliders (warp-aware)" "PASS"
 else
   PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
     -c "luafile $TEST_DIR/_tmp_scrub_test.lua" \
     -c "qa!" 2>&1 | head -30 >&2
   report "Test 9: keyboard scrub" "FAIL"
+fi
+
+header "Test 10: envelope curve parsing + curved interpolation"
+
+cat > "$TEST_DIR/_tmp_env_test.lua" << 'LUAEOF'
+-- Verify Env curves: parse attaches the right curve per segment (default,
+-- numeric, named symbol, Env.new per-segment array) and the widget actually
+-- bends the plot (a curved decay differs from a linear one and dwells lower).
+vim.opt.rtp:prepend(vim.env.PLUGIN_DIR)
+package.path = vim.env.PLUGIN_DIR .. "/lua/?.lua;" .. vim.env.PLUGIN_DIR .. "/lua/?/init.lua;" .. package.path
+
+local env = require("sc_inline_visual.env")
+local w = require("sc_inline_visual.widgets.env")
+local errors = {}
+
+-- 10a: curve attaches to breakpoints with SC defaults / explicit values.
+local function curve_of(src, idx) local e = env.parse(src); return e and e.points[idx] and e.points[idx].c end
+if curve_of("Env.perc(0.01, 1.0)", 3) ~= -4 then errors[#errors+1] = "10a: perc default curve -4" end
+if curve_of("Env.adsr(0.01, 0.2, 0.5, 1)", 2) ~= -4 then errors[#errors+1] = "10a: adsr default -4" end
+if curve_of("Env.perc(0.01, 1, 1, \\sin)", 3) ~= "sin" then errors[#errors+1] = "10a: perc \\sin symbol" end
+if curve_of("Env.perc(0.01, 1, 1, -8)", 3) ~= -8 then errors[#errors+1] = "10a: perc numeric -8" end
+if curve_of("Env([0,1,0], [1,1])", 2) ~= "lin" then errors[#errors+1] = "10a: Env.new default lin" end
+
+-- 10b: Env.new per-segment curve array (wraps if short).
+local e2 = env.parse("Env([0,1,0.3,0], [0.1,0.2,0.5], [\\exp, -4, \\lin])")
+if not (e2 and e2.points[2].c == "exp" and e2.points[3].c == -4 and e2.points[4].c == "lin") then
+  errors[#errors+1] = "10b: per-segment curve array"
+end
+local e3 = env.parse("Env([0,1,0.3,0], [0.1,0.2,0.5], \\exp)")
+if not (e3 and e3.points[2].c == "exp" and e3.points[4].c == "exp") then errors[#errors+1] = "10b: scalar applies to all" end
+
+-- 10c: the curve actually changes the render — convex (-4) ≠ linear (0), and
+-- the curved decay sits lower at the segment midpoint (drops faster).
+local function rows_text(src)
+  local rows = w.env_preview(env.parse(src))
+  local out = {}
+  for _, row in ipairs(rows) do local s = "" for _, seg in ipairs(row) do s = s .. seg[1] end out[#out+1] = s end
+  return table.concat(out, "\n")
+end
+local lin = rows_text("Env.perc(0.01, 1.2, 1, 0)")
+local cv = rows_text("Env.perc(0.01, 1.2, 1, -4)")
+if lin == cv then errors[#errors+1] = "10c: curved render identical to linear" end
+
+if #errors == 0 then
+  print("ENV_RESULT:PASS")
+else
+  for _, e in ipairs(errors) do io.stderr:write("  env error: " .. e .. "\n") end
+  print("ENV_RESULT:FAIL")
+end
+LUAEOF
+
+ENV_RESULT=$(PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+  -c "luafile $TEST_DIR/_tmp_env_test.lua" \
+  -c "qa!" 2>&1 | grep "ENV_RESULT:" | head -1 || true)
+
+if [[ "$ENV_RESULT" == *":PASS"* ]]; then
+  report "env: curve parsed per segment (default / numeric / symbol)" "PASS"
+  report "env: Env.new per-segment curve array (wrapping)" "PASS"
+  report "env: curved interpolation bends the plot vs linear" "PASS"
+else
+  PLUGIN_DIR="$PLUGIN_DIR" nvim --headless --clean -u NONE \
+    -c "luafile $TEST_DIR/_tmp_env_test.lua" \
+    -c "qa!" 2>&1 | head -30 >&2
+  report "Test 10: envelope curves" "FAIL"
 fi
 
 # ─────────────────────────────────────────────────────────────
